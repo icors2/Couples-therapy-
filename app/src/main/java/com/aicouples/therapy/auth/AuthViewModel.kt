@@ -1,5 +1,6 @@
 package com.aicouples.therapy.auth
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicouples.therapy.common.Result
@@ -59,10 +60,10 @@ class AuthViewModel @Inject constructor(
         }
     }
 
-    fun signInWithGoogle() {
+    fun signInWithGoogle(activityContext: Context) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
-            when (val result = authRepository.signInWithGoogle()) {
+            when (val result = authRepository.signInWithGoogle(activityContext)) {
                 is Result.Success -> {
                     _uiState.update {
                         it.copy(

@@ -1,6 +1,8 @@
 package com.aicouples.therapy.data.repository
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
@@ -12,7 +14,6 @@ import com.aicouples.therapy.data.model.ProfileInsert
 import com.aicouples.therapy.data.model.UserProfile
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.Google
@@ -29,7 +30,6 @@ import java.util.UUID
 @Singleton
 class AuthRepository @Inject constructor(
     private val client: SupabaseClient,
-    @ApplicationContext private val context: Context,
 ) {
     val sessionStatus: Flow<SessionStatus> = client.auth.sessionStatus
 
@@ -37,10 +37,18 @@ class AuthRepository @Inject constructor(
 
     fun currentUserId(): String? = client.auth.currentUserOrNull()?.id
 
-    suspend fun signInWithGoogle(): Result<UserProfile> = runCatchingResultSuspend {
+    /**
+     * Credential Manager must be launched with an Activity context — Application
+     * context cannot show the Google account selector UI.
+     */
+    suspend fun signInWithGoogle(activityContext: Context): Result<UserProfile> = runCatchingResultSuspend {
         require(BuildConfig.GOOGLE_WEB_CLIENT_ID.isNotBlank()) {
             "GOOGLE_WEB_CLIENT_ID is missing. See user_setup.md."
         }
+        val activity = activityContext.findActivity()
+            ?: throw IllegalStateException(
+                "Google Sign-In requires an Activity context to show the account picker.",
+            )
 
         val nonce = UUID.randomUUID().toString()
         val hashedNonce = sha256(nonce)
@@ -55,9 +63,9 @@ class AuthRepository @Inject constructor(
             .addCredentialOption(googleIdOption)
             .build()
 
-        val credentialManager = CredentialManager.create(context)
+        val credentialManager = CredentialManager.create(activity)
         val result = try {
-            credentialManager.getCredential(context, request)
+            credentialManager.getCredential(activity, request)
         } catch (e: GetCredentialException) {
             throw IllegalStateException("Google Sign-In failed: ${e.message}", e)
         }
@@ -135,4 +143,13 @@ class AuthRepository @Inject constructor(
         val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
         return bytes.joinToString("") { "%02x".format(it) }
     }
+}
+
+private fun Context.findActivity(): Activity? {
+    var current: Context? = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return current as? Activity
 }

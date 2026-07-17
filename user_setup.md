@@ -165,12 +165,33 @@ In Supabase → **Edge Functions → Secrets** (or CLI):
 ```bash
 supabase secrets set OPENAI_API_KEY=sk-...
 supabase secrets set OPENAI_MODEL=gpt-4o-mini
+```
+
+Generate and set `CRON_SECRET` (used to authorize the scheduled `session-timeout` call):
+
+```bash
+# macOS / Linux
 supabase secrets set CRON_SECRET=$(openssl rand -hex 32)
+```
+
+```powershell
+# Windows PowerShell
+$cron = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })
+supabase secrets set "CRON_SECRET=$cron"
+Write-Host "Save this CRON_SECRET: $cron"
 ```
 
 `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are normally injected automatically for Edge Functions.
 
+If the CLI is not linked yet:
+
+```bash
+supabase link --project-ref YOUR_PROJECT_REF
+```
+
 ### Deploy functions
+
+From the repo root (after `supabase link`):
 
 ```bash
 supabase functions deploy pair-partner
@@ -183,15 +204,76 @@ supabase functions deploy end-session
 supabase functions deploy session-timeout
 ```
 
+Or deploy everything under `supabase/functions/`:
+
+```bash
+supabase functions deploy
+```
+
+Chat AI only needs `ai-respond` + `generate-memory` (plus `OPENAI_API_KEY`). Deploy all eight for full session lifecycle + inactivity timeout.
+
 ### Schedule inactivity timeout
 
-Use Supabase **Cron** (pg_cron + `net.http_post`) or an external cron hitting:
+Idle sessions are ended server-side by calling:
 
 `POST https://YOUR_PROJECT_REF.supabase.co/functions/v1/session-timeout`
 
 Header: `x-cron-secret: <CRON_SECRET>`
 
 Suggested cadence: every 5 minutes.
+
+Deploy `session-timeout` and set `CRON_SECRET` before scheduling. Chat AI works without this cron; it only auto-ends sessions idle for 10+ minutes.
+
+#### Option A — Dashboard Cron UI (if available)
+
+1. Supabase → left sidebar → **Integrations** → **Cron**  
+   (direct path pattern: `/project/YOUR_PROJECT_REF/integrations/cron`)
+2. Create a job that invokes the **Edge Function** `session-timeout` every 5 minutes, or an HTTP POST to the URL above with header `x-cron-secret`.
+
+If you do not see **Integrations → Cron**, use Option B. You do not need a separate “pg_net” menu item — `pg_net` is a database extension used under the hood.
+
+#### Option B — SQL Editor (recommended; always works)
+
+1. Dashboard → **SQL Editor** → New query.
+2. Enable extensions (once):
+
+```sql
+create extension if not exists pg_cron with schema pg_catalog;
+create extension if not exists pg_net with schema extensions;
+```
+
+You can also enable them under **Database → Extensions** (search `pg_cron` and `pg_net`). Direct path pattern: `/project/YOUR_PROJECT_REF/database/extensions`.
+
+3. Schedule the job (replace placeholders; use the same `CRON_SECRET` from Edge Function secrets):
+
+```sql
+select cron.schedule(
+  'session-timeout-every-5-min',
+  '*/5 * * * *',
+  $$
+  select net.http_post(
+    url := 'https://YOUR_PROJECT_REF.supabase.co/functions/v1/session-timeout',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'x-cron-secret', 'PASTE_YOUR_CRON_SECRET_HERE'
+    ),
+    body := '{}'::jsonb
+  );
+  $$
+);
+```
+
+4. Confirm the job exists:
+
+```sql
+select jobid, jobname, schedule, active
+from cron.job
+where jobname = 'session-timeout-every-5-min';
+```
+
+#### Option C — External cron
+
+Any external scheduler (GitHub Actions, cron-job.org, etc.) can `POST` the same URL every 5 minutes with header `x-cron-secret: <CRON_SECRET>`.
 
 ---
 
@@ -209,6 +291,14 @@ SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 SUPABASE_ANON_KEY=your_anon_or_publishable_key
 GOOGLE_WEB_CLIENT_ID=xxxx.apps.googleusercontent.com
 ```
+
+On **Windows**, set `sdk.dir` with forward slashes (Java Properties treats `\` as escapes and can fail with `Invalid file path`):
+
+```properties
+sdk.dir=C:/Users/YOUR_USER/AppData/Local/Android/Sdk
+```
+
+If `JAVA_HOME` is not set in the terminal, point it at Android Studio’s bundled JDK before building, or build from Android Studio.
 
 Build:
 

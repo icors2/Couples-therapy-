@@ -1,5 +1,6 @@
 package com.aicouples.therapy.auth
 
+import android.content.Context
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
@@ -27,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -34,8 +36,9 @@ import kotlinx.coroutines.delay
 @Composable
 fun AuthScreen(
     state: AuthUiState,
-    onGoogleSignIn: () -> Unit,
+    onGoogleSignIn: (Context) -> Unit,
 ) {
+    val context = LocalContext.current
     var showContent by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         delay(120)
@@ -81,7 +84,7 @@ fun AuthScreen(
                 )
                 Spacer(Modifier.height(24.dp))
                 Button(
-                    onClick = onGoogleSignIn,
+                    onClick = { onGoogleSignIn(context) },
                     enabled = !state.isLoading,
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier

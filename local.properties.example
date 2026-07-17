@@ -1,4 +1,5 @@
 ## Copy this file to local.properties and fill in values from user_setup.md
+## Windows: use forward slashes (C:/Users/.../Android/Sdk). Backslashes break Java Properties ("Invalid file path").
 sdk.dir=/path/to/Android/sdk
 
 # Supabase (public / publishable values — safe for the client)
