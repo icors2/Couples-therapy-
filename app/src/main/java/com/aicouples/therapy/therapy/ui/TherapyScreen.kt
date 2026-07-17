@@ -77,6 +77,31 @@ fun TherapyScreen(
         }
     }
 
+    if (state.showSessionEndedDialog) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissSessionEndedDialog,
+            title = { Text("Session ended") },
+            text = {
+                Text("This session has ended. Please start a new session.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.dismissSessionEndedDialog()
+                        onLeave()
+                    },
+                ) {
+                    Text("Return Home")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissSessionEndedDialog) {
+                    Text("OK")
+                }
+            },
+        )
+    }
+
     if (state.showEndConfirm) {
         AlertDialog(
             onDismissRequest = { viewModel.requestEndConfirm(false) },
@@ -146,6 +171,7 @@ fun TherapyScreen(
                     MessageBubble(
                         message = message,
                         isMine = message.sender == state.myRole,
+                        partnerLabel = state.partnerRoleLabel,
                         selected = state.selectedMessageId != null && state.selectedMessageId == message.id,
                         onLongPress = {
                             message.id?.let(viewModel::selectMessageForPin)
@@ -223,9 +249,9 @@ fun TherapyScreen(
                 }
             }
 
-            state.error?.let {
+            state.error?.let { err ->
                 Text(
-                    text = it,
+                    text = err.take(180),
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
@@ -239,6 +265,7 @@ fun TherapyScreen(
 private fun MessageBubble(
     message: ChatMessage,
     isMine: Boolean,
+    partnerLabel: String,
     selected: Boolean,
     onLongPress: () -> Unit,
     onDismissPinMenu: () -> Unit,
@@ -260,8 +287,8 @@ private fun MessageBubble(
     val label = when (message.sender) {
         MessageSender.AI -> "Therapist"
         MessageSender.SYSTEM -> "System"
-        MessageSender.PARTNER_A -> if (isMine) "You" else "Partner"
-        MessageSender.PARTNER_B -> if (isMine) "You" else "Partner"
+        MessageSender.PARTNER_A -> if (isMine) "You" else partnerLabel
+        MessageSender.PARTNER_B -> if (isMine) "You" else partnerLabel
     }
 
     Column(

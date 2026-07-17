@@ -56,9 +56,13 @@ class HistoryViewModel @Inject constructor(
     fun refresh() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
-            val relationshipId = authRepository.getProfile()?.relationshipId
+            val profile = authRepository.getProfile()
+            val relationshipId = profile?.activeRelationshipId ?: profile?.relationshipId
             if (relationshipId == null) {
-                _uiState.value = HistoryUiState(isLoading = false, error = "No relationship yet")
+                _uiState.value = HistoryUiState(
+                    isLoading = false,
+                    error = "Select a connection on Home first",
+                )
                 return@launch
             }
             val sessions = sessionRepository.listSessions(relationshipId)

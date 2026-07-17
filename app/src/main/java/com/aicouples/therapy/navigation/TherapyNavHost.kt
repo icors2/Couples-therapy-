@@ -10,6 +10,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.aicouples.therapy.auth.AgeGateScreen
 import com.aicouples.therapy.auth.AuthScreen
 import com.aicouples.therapy.auth.AuthViewModel
 import com.aicouples.therapy.history.HistoryScreen
@@ -25,19 +26,23 @@ fun TherapyNavHost(
     val navController = rememberNavController()
     val authState by authViewModel.uiState.collectAsStateWithLifecycle()
 
-    LaunchedEffect(authState.isAuthenticated, authState.isPaired, authState.isLoading) {
+    LaunchedEffect(
+        authState.isAuthenticated,
+        authState.hasAgeAttested,
+        authState.isLoading,
+    ) {
         if (authState.isLoading) return@LaunchedEffect
         val target = when {
             !authState.isAuthenticated -> Routes.AUTH
-            !authState.isPaired -> Routes.PAIRING
+            !authState.hasAgeAttested -> Routes.AGE_GATE
             else -> Routes.HOME
         }
         val current = navController.currentDestination?.route
-        if (current != target &&
-            current != Routes.THERAPY &&
-            current != Routes.HISTORY &&
-            current != Routes.SETTINGS
-        ) {
+        val allowStay = current == Routes.THERAPY ||
+            current == Routes.HISTORY ||
+            current == Routes.SETTINGS ||
+            current == Routes.PAIRING
+        if (current != target && !allowStay) {
             navController.navigate(target) {
                 popUpTo(0) { inclusive = true }
                 launchSingleTop = true
@@ -49,22 +54,35 @@ fun TherapyNavHost(
         navController = navController,
         startDestination = Routes.SPLASH,
     ) {
-        composable(Routes.SPLASH) {
-            // Auth bootstrap handled by AuthViewModel + LaunchedEffect above
-        }
+        composable(Routes.SPLASH) { }
         composable(Routes.AUTH) {
             AuthScreen(
                 state = authState,
                 onGoogleSignIn = authViewModel::signInWithGoogle,
             )
         }
-        composable(Routes.PAIRING) {
-            PairingScreen(
-                onPaired = {
+        composable(Routes.AGE_GATE) {
+            AgeGateScreen(
+                onCompleted = {
                     authViewModel.refreshProfile()
                     navController.navigate(Routes.HOME) {
-                        popUpTo(Routes.PAIRING) { inclusive = true }
+                        popUpTo(0) { inclusive = true }
                     }
+                },
+            )
+        }
+        composable(Routes.PAIRING) {
+            PairingScreen(
+                onBack = { navController.popBackStack() },
+                onPaired = { needsConsent, relationshipId ->
+                    authViewModel.refreshProfile()
+                    navController.navigate(Routes.HOME) {
+                        popUpTo(Routes.HOME) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                    // Consent is prompted on Home when starting therapy as Parent.
+                    void(needsConsent)
+                    void(relationshipId)
                 },
             )
         }
@@ -78,6 +96,7 @@ fun TherapyNavHost(
                 onOpenSession = { sessionId ->
                     navController.navigate(Routes.therapy(sessionId))
                 },
+                onAddConnection = { navController.navigate(Routes.PAIRING) },
             )
         }
         composable(
@@ -108,14 +127,13 @@ fun TherapyNavHost(
                         popUpTo(0) { inclusive = true }
                     }
                 },
-                onUnpaired = {
+                onNoConnectionsLeft = {
                     authViewModel.refreshProfile()
-                    navController.navigate(Routes.PAIRING) {
-                        popUpTo(0) { inclusive = true }
-                        launchSingleTop = true
-                    }
+                    navController.popBackStack()
                 },
             )
         }
     }
 }
+
+private fun void(@Suppress("UNUSED_PARAMETER") value: Any?) = Unit

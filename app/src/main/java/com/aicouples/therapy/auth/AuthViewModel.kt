@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.aicouples.therapy.common.Result
 import com.aicouples.therapy.data.model.UserProfile
 import com.aicouples.therapy.data.repository.AuthRepository
+import com.aicouples.therapy.data.repository.RelationshipRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.jan.supabase.auth.status.SessionStatus
 import javax.inject.Inject
@@ -18,7 +19,9 @@ import kotlinx.coroutines.launch
 data class AuthUiState(
     val isLoading: Boolean = true,
     val isAuthenticated: Boolean = false,
-    val isPaired: Boolean = false,
+    val hasAgeAttested: Boolean = false,
+    val connectionCount: Int = 0,
+    val isMinor: Boolean = false,
     val profile: UserProfile? = null,
     val error: String? = null,
 )
@@ -26,6 +29,7 @@ data class AuthUiState(
 @HiltViewModel
 class AuthViewModel @Inject constructor(
     private val authRepository: AuthRepository,
+    private val relationshipRepository: RelationshipRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(AuthUiState())
@@ -36,16 +40,7 @@ class AuthViewModel @Inject constructor(
             authRepository.sessionStatus.collect { status ->
                 when (status) {
                     is SessionStatus.Authenticated -> {
-                        val profile = runCatching { authRepository.ensureProfile() }.getOrNull()
-                        _uiState.update {
-                            it.copy(
-                                isLoading = false,
-                                isAuthenticated = true,
-                                profile = profile,
-                                isPaired = profile?.relationshipId != null,
-                                error = null,
-                            )
-                        }
+                        refreshProfile()
                     }
                     is SessionStatus.NotAuthenticated -> {
                         _uiState.update {
@@ -65,14 +60,7 @@ class AuthViewModel @Inject constructor(
             _uiState.update { it.copy(isLoading = true, error = null) }
             when (val result = authRepository.signInWithGoogle(activityContext)) {
                 is Result.Success -> {
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            isAuthenticated = true,
-                            profile = result.data,
-                            isPaired = result.data.relationshipId != null,
-                        )
-                    }
+                    applyProfile(result.data)
                 }
                 is Result.Error -> {
                     _uiState.update {
@@ -86,13 +74,28 @@ class AuthViewModel @Inject constructor(
 
     fun refreshProfile() {
         viewModelScope.launch {
-            val profile = authRepository.getProfile()
-            _uiState.update {
-                it.copy(
-                    profile = profile,
-                    isPaired = profile?.relationshipId != null,
-                )
-            }
+            val profile = runCatching { authRepository.ensureProfile() }.getOrNull()
+                ?: authRepository.getProfile()
+            applyProfile(profile)
+        }
+    }
+
+    private suspend fun applyProfile(profile: UserProfile?) {
+        val connections = if (profile != null) {
+            runCatching { relationshipRepository.listRelationships() }.getOrElse { emptyList() }
+        } else {
+            emptyList()
+        }
+        _uiState.update {
+            it.copy(
+                isLoading = false,
+                isAuthenticated = profile != null,
+                profile = profile,
+                hasAgeAttested = profile?.hasAgeAttested == true,
+                isMinor = profile?.isMinor == true,
+                connectionCount = connections.size,
+                error = null,
+            )
         }
     }
 }

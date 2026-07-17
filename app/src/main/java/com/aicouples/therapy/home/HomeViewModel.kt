@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicouples.therapy.common.Result
 import com.aicouples.therapy.data.model.AppNotification
+import com.aicouples.therapy.data.model.ConnectionItem
+import com.aicouples.therapy.data.model.MemberRole
 import com.aicouples.therapy.data.model.NotificationType
 import com.aicouples.therapy.data.model.SessionStatus
 import com.aicouples.therapy.data.model.UserProfile
@@ -26,14 +28,19 @@ import kotlinx.serialization.json.jsonPrimitive
 
 data class HomeUiState(
     val profile: UserProfile? = null,
-    val partner: UserProfile? = null,
+    val connections: List<ConnectionItem> = emptyList(),
+    val selectedRelationshipId: String? = null,
     val isStarting: Boolean = false,
     val pendingInvite: AppNotification? = null,
     val pendingSessionId: String? = null,
-    /** Pending invite I started — can cancel without waiting for the 30m auto-expire. */
     val myPendingSessionId: String? = null,
+    val showConsentForId: String? = null,
     val error: String? = null,
-)
+) {
+    val selected: ConnectionItem?
+        get() = connections.firstOrNull { it.relationship.id == selectedRelationshipId }
+            ?: connections.firstOrNull()
+}
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -59,9 +66,13 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                 }
+                if (notification.type == NotificationType.PARENTAL_CONSENT_GRANTED ||
+                    notification.type == NotificationType.PARTNER_PAIRED
+                ) {
+                    refresh()
+                }
             }
         }
-        // Poll so Join Therapy appears even if realtime notification decode fails.
         viewModelScope.launch {
             while (isActive) {
                 delay(3_000)
@@ -74,9 +85,17 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching {
                 val profile = authRepository.getProfile()
-                val partner = relationshipRepository.getPartnerProfile()
+                val connections = relationshipRepository.listConnections()
+                val selected = profile?.activeRelationshipId
+                    ?.takeIf { id -> connections.any { it.relationship.id == id } }
+                    ?: connections.firstOrNull()?.relationship?.id
                 _uiState.update {
-                    it.copy(profile = profile, partner = partner, error = null)
+                    it.copy(
+                        profile = profile,
+                        connections = connections,
+                        selectedRelationshipId = selected,
+                        error = null,
+                    )
                 }
                 refreshInviteState()
             }.onFailure { error ->
@@ -85,9 +104,17 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun selectConnection(relationshipId: String) {
+        viewModelScope.launch {
+            relationshipRepository.setActiveRelationship(relationshipId)
+            _uiState.update { it.copy(selectedRelationshipId = relationshipId) }
+            refreshInviteState()
+        }
+    }
+
     private suspend fun refreshInviteState() {
         val profile = _uiState.value.profile ?: authRepository.getProfile() ?: return
-        val relationshipId = profile.relationshipId ?: return
+        val relationshipId = _uiState.value.selectedRelationshipId ?: return
 
         val unread = runCatching { notificationRepository.listUnread() }.getOrElse { emptyList() }
         val invite = unread.firstOrNull { it.type == NotificationType.SESSION_INVITE }
@@ -108,9 +135,7 @@ class HomeViewModel @Inject constructor(
         }
 
         val myPendingSessionId = pendingSession
-            ?.takeIf {
-                it.status == SessionStatus.PENDING && it.startedBy == profile.id
-            }
+            ?.takeIf { it.status == SessionStatus.PENDING && it.startedBy == profile.id }
             ?.id
 
         _uiState.update {
@@ -125,13 +150,22 @@ class HomeViewModel @Inject constructor(
 
     fun startTherapy(onStarted: (String) -> Unit) {
         viewModelScope.launch {
-            val relationshipId = _uiState.value.profile?.relationshipId
-            if (relationshipId == null) {
-                _uiState.update { it.copy(error = "Pair with a partner first") }
+            val selected = _uiState.value.selected ?: run {
+                _uiState.update { it.copy(error = "Add a connection first") }
+                return@launch
+            }
+            if (selected.needsConsent && selected.myRole == MemberRole.PARENT) {
+                _uiState.update { it.copy(showConsentForId = selected.relationship.id) }
+                return@launch
+            }
+            if (!selected.canStartTherapy) {
+                _uiState.update {
+                    it.copy(error = "Waiting for parent/guardian consent before therapy can start")
+                }
                 return@launch
             }
             _uiState.update { it.copy(isStarting = true, error = null) }
-            when (val result = sessionRepository.startTherapy(relationshipId)) {
+            when (val result = sessionRepository.startTherapy(selected.relationship.id)) {
                 is Result.Success -> {
                     val sessionId = result.data.sessionId
                     _uiState.update { it.copy(isStarting = false) }
@@ -140,6 +174,38 @@ class HomeViewModel @Inject constructor(
                 }
                 is Result.Error -> {
                     _uiState.update { it.copy(isStarting = false, error = result.message) }
+                }
+                Result.Loading -> Unit
+            }
+        }
+    }
+
+    fun dismissConsent() {
+        _uiState.update { it.copy(showConsentForId = null) }
+    }
+
+    fun grantConsentThenStart(onStarted: (String) -> Unit) {
+        val relId = _uiState.value.showConsentForId ?: return
+        viewModelScope.launch {
+            when (val consent = relationshipRepository.consentParental(relId)) {
+                is Result.Success -> {
+                    if (!consent.data.ok) {
+                        _uiState.update {
+                            it.copy(
+                                showConsentForId = null,
+                                error = consent.data.message ?: "Consent failed",
+                            )
+                        }
+                        return@launch
+                    }
+                    _uiState.update { it.copy(showConsentForId = null) }
+                    refresh()
+                    startTherapy(onStarted)
+                }
+                is Result.Error -> {
+                    _uiState.update {
+                        it.copy(showConsentForId = null, error = consent.message)
+                    }
                 }
                 Result.Loading -> Unit
             }
@@ -179,9 +245,7 @@ class HomeViewModel @Inject constructor(
             val sessionId = _uiState.value.myPendingSessionId ?: return@launch
             when (val result = sessionRepository.declineSession(sessionId)) {
                 is Result.Success -> {
-                    _uiState.update {
-                        it.copy(myPendingSessionId = null, error = null)
-                    }
+                    _uiState.update { it.copy(myPendingSessionId = null, error = null) }
                 }
                 is Result.Error -> {
                     _uiState.update { it.copy(error = result.message ?: "Could not cancel invite") }

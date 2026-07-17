@@ -37,6 +37,17 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: false, message: "Forbidden" }, 403);
     }
 
+    const { data: p1 } = await admin.from("profiles").select("is_minor").eq("id", relationship.partner1_id).single();
+    const { data: p2 } = relationship.partner2_id
+      ? await admin.from("profiles").select("is_minor").eq("id", relationship.partner2_id).single()
+      : { data: null };
+    const promptCtx = {
+      relationshipType: relationship.relationship_type as string,
+      partner1Role: relationship.partner1_role as string,
+      partner2Role: relationship.partner2_role as string,
+      includesMinor: Boolean(p1?.is_minor || p2?.is_minor),
+    };
+
     if (session.status === "pending") {
       await admin.from("sessions").update({ status: "active" }).eq("id", session_id);
     }
@@ -186,6 +197,7 @@ Deno.serve(async (req) => {
       memoryRow?.memory_json ?? null,
       (count ?? 0) === 0,
       workingSummary,
+      promptCtx,
     );
     if (pinnedFacts.length > 0) {
       system +=

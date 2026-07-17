@@ -6,6 +6,8 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
     const { user } = await requireUser(req);
+    const body = await req.json().catch(() => ({}));
+    const relationshipId = body.relationship_id as string | undefined;
     const admin = serviceClient();
 
     const { data: me, error: meErr } = await admin
@@ -14,24 +16,36 @@ Deno.serve(async (req) => {
       .eq("id", user.id)
       .single();
     if (meErr || !me) return jsonResponse({ ok: false, message: "Profile not found" }, 404);
-    if (!me.relationship_id) {
-      return jsonResponse({ ok: false, message: "You are not paired" }, 400);
+
+    let relationship;
+    if (relationshipId) {
+      const { data, error } = await admin
+        .from("relationships")
+        .select("*")
+        .eq("id", relationshipId)
+        .single();
+      if (error || !data) return jsonResponse({ ok: false, message: "Relationship not found" }, 404);
+      relationship = data;
+    } else if (me.active_relationship_id) {
+      const { data, error } = await admin
+        .from("relationships")
+        .select("*")
+        .eq("id", me.active_relationship_id)
+        .single();
+      if (error || !data) return jsonResponse({ ok: false, message: "Relationship not found" }, 404);
+      relationship = data;
+    } else {
+      return jsonResponse({ ok: false, message: "relationship_id is required" }, 400);
     }
 
-    const { data: relationship, error: relErr } = await admin
-      .from("relationships")
-      .select("*")
-      .eq("id", me.relationship_id)
-      .single();
-    if (relErr || !relationship) {
-      return jsonResponse({ ok: false, message: "Relationship not found" }, 404);
+    if (relationship.partner1_id !== user.id && relationship.partner2_id !== user.id) {
+      return jsonResponse({ ok: false, message: "Forbidden" }, 403);
     }
 
     const partnerId = relationship.partner1_id === user.id
       ? relationship.partner2_id
       : relationship.partner1_id;
 
-    // Close open sessions before cascade delete (no memory handoff — relationship data is removed).
     const now = new Date().toISOString();
     await admin
       .from("sessions")
@@ -48,8 +62,8 @@ Deno.serve(async (req) => {
       await admin.from("notifications").insert({
         user_id: partnerId,
         type: "partner_unpaired",
-        title: "Partnership ended",
-        body: `${me.display_name ?? "Your partner"} unpaired. Shared sessions and AI memory were removed.`,
+        title: "Connection ended",
+        body: `${me.display_name ?? "Someone"} removed this connection. Shared sessions and AI memory were removed.`,
         payload: { relationship_id: relationship.id },
       });
     }
@@ -62,27 +76,33 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: false, message: deleteErr.message }, 500);
     }
 
-    // Regenerate pair codes so old codes cannot be reused after unpair.
+    // Clear active pointer if it pointed here; pick another membership if any
     for (const uid of [user.id, partnerId].filter(Boolean) as string[]) {
-      const { data: codeRow, error: codeErr } = await admin.rpc("generate_pair_code");
-      if (codeErr || !codeRow) {
-        return jsonResponse({
-          ok: false,
-          message: codeErr?.message ?? "Could not regenerate pair code",
-        }, 500);
-      }
-      const { error: profileErr } = await admin
+      const { data: remaining } = await admin
+        .from("relationships")
+        .select("id")
+        .or(`partner1_id.eq.${uid},partner2_id.eq.${uid}`)
+        .limit(1)
+        .maybeSingle();
+      await admin
         .from("profiles")
-        .update({ pair_code: codeRow as string })
-        .eq("id", uid);
-      if (profileErr) {
-        return jsonResponse({ ok: false, message: profileErr.message }, 500);
+        .update({ active_relationship_id: remaining?.id ?? null })
+        .eq("id", uid)
+        .eq("active_relationship_id", relationship.id);
+      // Also fix if active was this id (eq filter may miss if already null via FK)
+      const { data: prof } = await admin.from("profiles").select("active_relationship_id").eq("id", uid).single();
+      if (prof?.active_relationship_id === relationship.id || !prof?.active_relationship_id) {
+        await admin
+          .from("profiles")
+          .update({ active_relationship_id: remaining?.id ?? null })
+          .eq("id", uid);
       }
     }
 
     return jsonResponse({
       ok: true,
       message: "Unpaired successfully",
+      relationship_id: relationship.id,
     });
   } catch (e) {
     return jsonResponse({ ok: false, message: (e as Error).message }, 401);

@@ -3,6 +3,7 @@ package com.aicouples.therapy.navigation
 object Routes {
     const val SPLASH = "splash"
     const val AUTH = "auth"
+    const val AGE_GATE = "age_gate"
     const val PAIRING = "pairing"
     const val HOME = "home"
     const val THERAPY = "therapy/{sessionId}"

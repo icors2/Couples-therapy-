@@ -3,6 +3,7 @@ package com.aicouples.therapy.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicouples.therapy.common.Result
+import com.aicouples.therapy.data.model.ConnectionItem
 import com.aicouples.therapy.data.model.UserSettings
 import com.aicouples.therapy.data.repository.AuthRepository
 import com.aicouples.therapy.data.repository.RelationshipRepository
@@ -20,11 +21,9 @@ data class SettingsUiState(
     val displayName: String = "",
     val email: String = "",
     val pairCode: String = "",
-    val partnerName: String? = null,
-    val isPaired: Boolean = false,
-    val showUnpairConfirm: Boolean = false,
+    val connections: List<ConnectionItem> = emptyList(),
+    val unpairTargetId: String? = null,
     val isUnpairing: Boolean = false,
-    val message: String? = null,
     val error: String? = null,
 )
 
@@ -39,17 +38,20 @@ class SettingsViewModel @Inject constructor(
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
     init {
+        refresh()
+    }
+
+    fun refresh() {
         viewModelScope.launch {
             val profile = authRepository.getProfile()
             val settings = settingsRepository.getSettings()
-            val partner = relationshipRepository.getPartnerProfile()
+            val connections = relationshipRepository.listConnections()
             _uiState.value = SettingsUiState(
                 settings = settings,
                 displayName = profile?.displayName.orEmpty(),
                 email = profile?.email.orEmpty(),
                 pairCode = profile?.pairCode.orEmpty(),
-                partnerName = partner?.displayName,
-                isPaired = profile?.relationshipId != null,
+                connections = connections,
             )
         }
     }
@@ -63,25 +65,26 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun requestUnpairConfirm(show: Boolean) {
-        _uiState.update { it.copy(showUnpairConfirm = show, error = null) }
+    fun requestUnpair(relationshipId: String?) {
+        _uiState.update { it.copy(unpairTargetId = relationshipId, error = null) }
     }
 
-    fun unpair(onUnpaired: () -> Unit) {
+    fun unpair(onNoConnectionsLeft: () -> Unit) {
+        val id = _uiState.value.unpairTargetId ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isUnpairing = true, error = null) }
-            when (val result = relationshipRepository.unpair()) {
+            when (val result = relationshipRepository.unpair(id)) {
                 is Result.Success -> {
                     if (result.data.ok) {
+                        val remaining = relationshipRepository.listConnections()
                         _uiState.update {
                             it.copy(
                                 isUnpairing = false,
-                                showUnpairConfirm = false,
-                                isPaired = false,
-                                partnerName = null,
+                                unpairTargetId = null,
+                                connections = remaining,
                             )
                         }
-                        onUnpaired()
+                        if (remaining.isEmpty()) onNoConnectionsLeft()
                     } else {
                         _uiState.update {
                             it.copy(

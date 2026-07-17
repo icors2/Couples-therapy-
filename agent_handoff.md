@@ -9,11 +9,18 @@ Use this file when continuing work in a **local Cursor IDE** (or any new agent s
 | Item | Value |
 |------|--------|
 | GitHub | `https://github.com/icors2/Couples-therapy-.git` |
-| Working branch | `cursor/ai-couples-therapy-app-3493` (**ahead of `main`**) |
-| Base branch | `main` |
-| Latest push | `8dc911f` — Google Sign-In Activity context fix + setup doc updates |
+| Working branch | `main` (multi-relationship work may be local until committed) |
 | Package name | `com.aicouples.therapy` |
 | App module | Android (Kotlin + Jetpack Compose + Hilt + Supabase) |
+| Supabase ref | `yxherebpbkvlkqboqwtg` |
+
+### Multi-relationship + parent–child (2026-07-17)
+
+- Users can have **multiple** dyads (`couples` or `parent_child`); Home picks who to start with.
+- **Age gate** (`attest-age`) required after sign-in; minors need **parental consent** (`consent-parental`) before sessions.
+- New migration: `supabase/migrations/20260717160000_multi_relationship_family.sql`
+- New Edge Functions: `attest-age`, `consent-parental`; updated `pair-partner`, `unpair-partner`, `start-session`, AI prompts.
+- Install latest `app-debug.apk`; existing users will see the age gate once, then re-add connections if needed.
 
 Clone (Windows):
 

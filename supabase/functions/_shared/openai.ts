@@ -3,7 +3,14 @@ export type ChatMessage = {
   content: string;
 };
 
-const THERAPIST_SYSTEM = `You are an AI couples therapy facilitator embedded in a messaging app with two partners.
+export type RelationshipPromptContext = {
+  relationshipType?: "couples" | "parent_child" | string;
+  partner1Role?: string;
+  partner2Role?: string;
+  includesMinor?: boolean;
+};
+
+const COUPLES_SYSTEM = `You are an AI couples therapy facilitator embedded in a messaging app with two partners.
 You are NOT a licensed clinician and must never claim to be one or replace professional care.
 Never choose sides. Encourage healthy communication, reflect emotions, ask thoughtful questions,
 and keep discussions productive. Do not dominate — respond when helpful after partners share.
@@ -16,6 +23,24 @@ preferences, homework, etc.), answer from that memory / key_facts when present.
 Do NOT say you lack access to prior sessions if the memory JSON contains the answer.
 If memory truly does not contain the requested detail, say you do not have that detail saved yet
 and invite them to share it again so it can be remembered.`;
+
+const FAMILY_SYSTEM = `You are an AI family communication facilitator for a parent and child in a messaging app.
+You are NOT a licensed clinician and must never claim to be one or replace professional care.
+Do NOT treat them as equal romantic partners. Acknowledge power dynamics: the parent holds more authority;
+support the child's age-appropriate autonomy and voice without undermining safety.
+Never triangulate or take sides. Encourage respectful listening, clear boundaries, and repair after conflict.
+Keep replies concise (usually 2–5 short paragraphs or fewer). Use a warm, calm tone.
+If someone appears in crisis or immediate danger, urge emergency services or a crisis hotline,
+and for a minor also urge involving a trusted adult / parent / guardian.
+
+You receive structured therapeutic memory JSON from prior sessions. Treat it as durable continuity for THIS family dyad only.`;
+
+const MINOR_SAFETY = `
+Extra safety (a minor is present):
+- No romantic, sexual, or adult-dating framing.
+- Use language appropriate for a minor; avoid graphic content.
+- Prefer inviting a trusted adult when topics involve safety, abuse, self-harm, or emergencies.
+- Never ask a minor to keep secrets from a parent/guardian about safety concerns.`;
 
 /** Trim memory JSON to the fields most useful for live facilitation. */
 export function trimMemoryForPrompt(memoryJson: unknown): unknown {
@@ -33,11 +58,22 @@ export function trimMemoryForPrompt(memoryJson: unknown): unknown {
   };
 }
 
+function roleLabels(ctx?: RelationshipPromptContext): string {
+  if (!ctx || ctx.relationshipType !== "parent_child") {
+    return "Label speakers as Partner A and Partner B.";
+  }
+  const a = ctx.partner1Role === "parent" ? "Parent" : ctx.partner1Role === "child" ? "Child" : "Person A";
+  const b = ctx.partner2Role === "parent" ? "Parent" : ctx.partner2Role === "child" ? "Child" : "Person B";
+  return `This is a parent–child dyad. Prefer labels "${a}" (partner_a) and "${b}" (partner_b) in your understanding.`;
+}
+
 export function therapistSystemPrompt(
   memoryJson: unknown,
   isFirstSession: boolean,
   workingSummary?: string | null,
+  ctx?: RelationshipPromptContext,
 ): string {
+  const base = ctx?.relationshipType === "parent_child" ? FAMILY_SYSTEM : COUPLES_SYSTEM;
   const trimmed = trimMemoryForPrompt(memoryJson);
   const memoryBlock = memoryJson
     ? `\nTherapeutic memory from prior sessions (key fields):\n${JSON.stringify(trimmed, null, 2)}`
@@ -47,12 +83,18 @@ export function therapistSystemPrompt(
     : "";
   const continuity = isFirstSession
     ? "This may be an early session. Establish safety and rapport."
+    : ctx?.relationshipType === "parent_child"
+    ? "You are continuing with this parent–child pair. Maintain continuity using the memory JSON."
     : "You are continuing therapy with this couple. Maintain continuity using the memory JSON. Prefer recalling saved facts over asking them to repeat.";
-  return `${THERAPIST_SYSTEM}\n\n${continuity}${memoryBlock}${summaryBlock}`;
+  const minor = ctx?.includesMinor ? `\n${MINOR_SAFETY}` : "";
+  return `${base}\n\n${roleLabels(ctx)}\n\n${continuity}${memoryBlock}${summaryBlock}${minor}`;
 }
 
-export function memoryHandoffSystemPrompt(): string {
-  return `You update structured therapeutic memory for a couples therapy app.
+export function memoryHandoffSystemPrompt(relationshipType?: string): string {
+  const who = relationshipType === "parent_child"
+    ? "a parent–child family facilitation app"
+    : "a couples therapy app";
+  return `You update structured therapeutic memory for ${who}.
 Return ONLY valid JSON matching this shape (no markdown):
 {
   "relationship_summary": "string",
@@ -74,10 +116,7 @@ Return ONLY valid JSON matching this shape (no markdown):
 }
 
 Rules:
-- Preserve concrete durable facts partners explicitly shared (favorite colors, number lists, names,
-  preferences, dates, commitments). Put them in key_facts and/or partner_*_notes with the actual values.
-- Example key_facts entry: "Partner A favorite colors (in order): green, blue, red, pink, purple, orange"
-- Example: "Partner B memory-test numbers: 10, 64, 11, 888, 44456, 2215"
+- Preserve concrete durable facts members explicitly shared.
 - Merge with prior memory: keep old key_facts unless clearly corrected or withdrawn.
 - Do not invent facts not supported by the transcript or prior memory.
 - Be concise and clinically careful.`;
@@ -134,19 +173,12 @@ export function isDirectAiAddress(content: string): boolean {
   ) {
     return true;
   }
-  // Question clearly about AI memory / prior sessions
   if (t.includes("?") && /\b(you|remember|memory|session|favorite|colours|colors|numbers)\b/.test(t)) {
     return true;
   }
   return false;
 }
 
-/**
- * Decide whether the AI should reply now.
- * - Always reply to direct questions / recall asks
- * - Otherwise wait until both partners have spoken recently (streak >= 2)
- * - After streak >= 2, reply on every 2nd partner message (not every message)
- */
 export function shouldAiRespond(
   recentUserMessages: number,
   lastSender: string,
@@ -155,6 +187,5 @@ export function shouldAiRespond(
   if (lastSender === "ai" || lastSender === "system") return false;
   if (isDirectAiAddress(lastContent)) return true;
   if (recentUserMessages < 2) return false;
-  // Every 2nd partner message once both have spoken (streak 2, 4, 6…).
   return recentUserMessages % 2 === 0;
 }

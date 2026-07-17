@@ -22,6 +22,13 @@ Deno.serve(async (req) => {
     const { data: session } = await admin.from("sessions").select("*").eq("id", session_id).single();
     if (!session) return jsonResponse({ ok: false, message: "Session not found" }, 404);
 
+    const { data: relForType } = await admin
+      .from("relationships")
+      .select("relationship_type")
+      .eq("id", session.relationship_id)
+      .maybeSingle();
+    const relationshipType = relForType?.relationship_type as string | undefined;
+
     // Idempotency: one memory document per source session.
     const { data: existing } = await admin
       .from("ai_memory")
@@ -81,7 +88,7 @@ Deno.serve(async (req) => {
 
     const completion = await chatCompletion(
       [
-        { role: "system", content: memoryHandoffSystemPrompt() },
+        { role: "system", content: memoryHandoffSystemPrompt(relationshipType) },
         {
           role: "user",
           content:

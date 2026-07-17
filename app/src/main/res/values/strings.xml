@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AI Couples Therapy</string>
+    <string name="app_name">Family Therapy</string>
     <string name="continue_with_google">Continue with Google</string>
     <string name="start_therapy">Start Therapy</string>
     <string name="history">History</string>

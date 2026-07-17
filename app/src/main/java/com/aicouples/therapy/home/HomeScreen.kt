@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,7 +14,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -38,6 +42,7 @@ fun HomeScreen(
     onOpenHistory: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSession: (String) -> Unit,
+    onAddConnection: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -46,6 +51,28 @@ fun HomeScreen(
         delay(80)
         visible = true
         viewModel.refresh()
+    }
+
+    if (state.showConsentForId != null) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissConsent,
+            title = { Text("Parental consent required") },
+            text = {
+                Text(
+                    "I confirm I am the parent or legal guardian of this minor. " +
+                        "I consent to their use of this AI communication facilitator. " +
+                        "I understand it is not licensed therapy or emergency care.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.grantConsentThenStart(onStartTherapy) }) {
+                    Text("I consent")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissConsent) { Text("Cancel") }
+            },
+        )
     }
 
     Column(
@@ -61,37 +88,99 @@ fun HomeScreen(
                 ),
             )
             .statusBarsPadding()
-            .padding(24.dp),
+            .padding(24.dp)
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         AnimatedVisibility(visible = visible, enter = fadeIn() + slideInVertically { it / 8 }) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "AI Couples Therapy",
+                    text = "Family Therapy",
                     style = MaterialTheme.typography.headlineLarge,
                     color = MaterialTheme.colorScheme.primary,
                 )
-                val partnerName = state.partner?.displayName ?: "your partner"
                 Text(
-                    text = "Hello ${state.profile?.displayName ?: "there"}. Ready to talk with $partnerName?",
+                    text = "Hello ${state.profile?.displayName ?: "there"}. Choose who you'd like to talk with.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
 
-        Spacer(Modifier.height(24.dp))
+        if (state.profile?.isMinor == true && state.connections.none { it.canStartTherapy }) {
+            Text(
+                text = "Ask a parent/guardian to connect using your pair code, then grant consent.",
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                text = "Your code: ${state.profile?.pairCode.orEmpty()}",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+
+        Text("Connections", style = MaterialTheme.typography.titleMedium)
+        if (state.connections.isEmpty()) {
+            Text(
+                text = "No connections yet. Add a couples or parent–child link to begin.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            state.connections.forEach { item ->
+                val selected = item.relationship.id == state.selected?.relationship?.id
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { viewModel.selectConnection(item.relationship.id) }
+                        .background(
+                            if (selected) {
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                            },
+                            RoundedCornerShape(12.dp),
+                        )
+                        .padding(14.dp),
+                ) {
+                    Text(item.partnerLabel, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = buildString {
+                            append(item.typeLabel)
+                            if (item.needsConsent) append(" · consent needed")
+                            else if (!item.canStartTherapy) append(" · waiting")
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        OutlinedButton(
+            onClick = onAddConnection,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) {
+            Text("Add connection")
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         Button(
             onClick = { viewModel.startTherapy(onStartTherapy) },
-            enabled = !state.isStarting,
+            enabled = !state.isStarting && state.selected != null,
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(64.dp),
         ) {
             Text(
-                text = if (state.isStarting) "Starting…" else "Start Therapy",
+                text = when {
+                    state.isStarting -> "Starting…"
+                    state.selected == null -> "Start Therapy"
+                    else -> "Start Therapy with ${state.selected?.partner?.displayName ?: "them"}"
+                },
                 style = MaterialTheme.typography.titleLarge,
             )
         }
@@ -113,14 +202,10 @@ fun HomeScreen(
         }
 
         if (state.myPendingSessionId != null) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Waiting for ${state.partner?.displayName ?: "your partner"} to join",
+                text = "Waiting for ${state.selected?.partner?.displayName ?: "them"} to join",
                 style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = "Your invite stays open for 30 minutes. You can cancel it anytime.",
-                style = MaterialTheme.typography.bodyMedium,
             )
             TextButton(onClick = viewModel::cancelMyInvite) {
                 Text("Cancel invite")
@@ -128,15 +213,10 @@ fun HomeScreen(
         }
 
         if (state.pendingSessionId != null) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = state.pendingInvite?.title ?: "Therapy session invite",
                 style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = state.pendingInvite?.body
-                    ?: "${state.partner?.displayName ?: "Your partner"} started a therapy session.",
-                style = MaterialTheme.typography.bodyMedium,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button(onClick = { viewModel.joinInvite(onOpenSession) }) {

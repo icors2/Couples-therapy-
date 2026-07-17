@@ -7,6 +7,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.aicouples.therapy.common.Result
 import com.aicouples.therapy.data.model.ChatMessage
+import com.aicouples.therapy.data.model.MemberRole
 import com.aicouples.therapy.data.model.MessageSender
 import com.aicouples.therapy.data.model.SessionStatus
 import com.aicouples.therapy.data.model.TherapySession
@@ -37,16 +38,24 @@ data class TherapyUiState(
     val me: UserProfile? = null,
     val partner: UserProfile? = null,
     val myRole: MessageSender = MessageSender.PARTNER_A,
+    val partnerRoleLabel: String = "Partner",
     val isSending: Boolean = false,
     val isAiTyping: Boolean = false,
     val isSpeaking: Boolean = false,
     val canSpeak: Boolean = false,
     val elapsedLabel: String = "00:00",
     val showEndConfirm: Boolean = false,
+    val showSessionEndedDialog: Boolean = false,
     val selectedMessageId: String? = null,
     val error: String? = null,
     val ended: Boolean = false,
 )
+
+private fun roleDisplay(role: MemberRole): String = when (role) {
+    MemberRole.PARTNER -> "Partner"
+    MemberRole.PARENT -> "Parent"
+    MemberRole.CHILD -> "Child"
+}
 
 @HiltViewModel
 class TherapyViewModel @Inject constructor(
@@ -85,20 +94,28 @@ class TherapyViewModel @Inject constructor(
     private fun bootstrap() {
         viewModelScope.launch {
             val me = authRepository.getProfile()
-            val partner = relationshipRepository.getPartnerProfile()
-            val relationship = relationshipRepository.getCurrentRelationship()
+            val session = sessionRepository.getSession(sessionId)
+            val relationship = session?.relationshipId?.let {
+                relationshipRepository.getRelationship(it)
+            } ?: relationshipRepository.getCurrentRelationship()
+            val partner = relationshipRepository.getPartnerProfile(relationship)
             val myRole = when (me?.id) {
                 relationship?.partner1Id -> MessageSender.PARTNER_A
                 else -> MessageSender.PARTNER_B
             }
+            val partnerRoleLabel = when {
+                relationship == null -> "Partner"
+                me?.id == relationship.partner1Id -> roleDisplay(relationship.partner2Role)
+                else -> roleDisplay(relationship.partner1Role)
+            }
 
-            val session = sessionRepository.getSession(sessionId)
             val messages = messageRepository.listMessages(sessionId)
             _uiState.update {
                 it.copy(
                     me = me,
                     partner = partner,
                     myRole = myRole,
+                    partnerRoleLabel = partnerRoleLabel,
                     session = session,
                     messages = messages,
                     canSpeak = messages.any { m -> m.sender == MessageSender.AI },
@@ -264,13 +281,36 @@ class TherapyViewModel @Inject constructor(
                 }
                 is Result.Error -> {
                     typingTimeoutJob?.cancel()
-                    _uiState.update {
-                        it.copy(isSending = false, isAiTyping = false, error = result.message, draft = content)
+                    val sessionClosed = looksLikeClosedSessionError(result.message)
+                    if (sessionClosed) {
+                        _uiState.update {
+                            it.copy(
+                                isSending = false,
+                                isAiTyping = false,
+                                draft = content,
+                                ended = true,
+                                error = null,
+                                showSessionEndedDialog = true,
+                            )
+                        }
+                    } else {
+                        _uiState.update {
+                            it.copy(
+                                isSending = false,
+                                isAiTyping = false,
+                                error = friendlySendError(result.message),
+                                draft = content,
+                            )
+                        }
                     }
                 }
                 Result.Loading -> Unit
             }
         }
+    }
+
+    fun dismissSessionEndedDialog() {
+        _uiState.update { it.copy(showSessionEndedDialog = false) }
     }
 
     fun toggleSpeakLatestAi() {
@@ -335,5 +375,28 @@ class TherapyViewModel @Inject constructor(
         tts?.shutdown()
         tts = null
         super.onCleared()
+    }
+
+    private companion object {
+        fun looksLikeClosedSessionError(message: String?): Boolean {
+            val m = message?.lowercase().orEmpty()
+            if (m.isBlank()) return false
+            return m.contains("row-level security") ||
+                m.contains("row level security") ||
+                m.contains("violates row-level security policy") ||
+                (m.contains("messages") && m.contains("42501")) ||
+                m.contains("session is not active") ||
+                m.contains("session has ended") ||
+                m.contains("session ended")
+        }
+
+        fun friendlySendError(message: String?): String {
+            val m = message.orEmpty()
+            // Never dump raw HTTP / JWT bodies into the UI.
+            if (m.length > 180 || m.contains("Bearer ") || m.contains("http")) {
+                return "Could not send message. Please try again."
+            }
+            return m.ifBlank { "Could not send message. Please try again." }
+        }
     }
 }

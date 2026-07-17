@@ -51,3 +51,9 @@ verify_jwt = false
 
 [functions.unpair-partner]
 verify_jwt = true
+
+[functions.attest-age]
+verify_jwt = true
+
+[functions.consent-parental]
+verify_jwt = true

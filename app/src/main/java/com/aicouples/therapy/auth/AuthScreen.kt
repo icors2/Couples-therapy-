@@ -71,7 +71,7 @@ fun AuthScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
-                    text = "AI Couples Therapy",
+                    text = "Family Therapy",
                     style = MaterialTheme.typography.displayLarge,
                     color = MaterialTheme.colorScheme.primary,
                     textAlign = TextAlign.Center,

@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
@@ -34,37 +36,36 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 fun SettingsScreen(
     onBack: () -> Unit,
     onSignedOut: () -> Unit,
-    onUnpaired: () -> Unit,
+    onNoConnectionsLeft: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val pendingUnpair = state.connections.firstOrNull { it.relationship.id == state.unpairTargetId }
 
-    if (state.showUnpairConfirm) {
+    if (state.unpairTargetId != null && pendingUnpair != null) {
         AlertDialog(
-            onDismissRequest = { viewModel.requestUnpairConfirm(false) },
-            title = { Text("Unpair from partner?") },
+            onDismissRequest = { viewModel.requestUnpair(null) },
+            title = { Text("Remove connection?") },
             text = {
                 Text(
-                    "This deletes all shared sessions and AI memory for you and " +
-                        "${state.partnerName ?: "your partner"}. Pair codes will be regenerated. " +
-                        "This cannot be undone.",
+                    "This deletes all shared sessions and AI memory with " +
+                        "${pendingUnpair.partner?.displayName ?: "this person"} (${pendingUnpair.typeLabel}). " +
+                        "Other connections are kept.",
                 )
             },
             confirmButton = {
                 TextButton(
-                    onClick = { viewModel.unpair(onUnpaired) },
+                    onClick = { viewModel.unpair(onNoConnectionsLeft) },
                     enabled = !state.isUnpairing,
                 ) {
-                    Text(if (state.isUnpairing) "Unpairing…" else "Unpair")
+                    Text(if (state.isUnpairing) "Removing…" else "Unpair")
                 }
             },
             dismissButton = {
                 TextButton(
-                    onClick = { viewModel.requestUnpairConfirm(false) },
+                    onClick = { viewModel.requestUnpair(null) },
                     enabled = !state.isUnpairing,
-                ) {
-                    Text("Cancel")
-                }
+                ) { Text("Cancel") }
             },
         )
     }
@@ -86,7 +87,8 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(20.dp),
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             Text("Profile", style = MaterialTheme.typography.titleLarge)
@@ -94,17 +96,26 @@ fun SettingsScreen(
             Text(state.email, style = MaterialTheme.typography.bodyMedium)
             Text("Pair code: ${state.pairCode}", style = MaterialTheme.typography.bodyMedium)
 
-            if (state.isPaired) {
+            Text("Connections", style = MaterialTheme.typography.titleLarge)
+            if (state.connections.isEmpty()) {
                 Text(
-                    text = "Paired with ${state.partnerName ?: "your partner"}",
-                    style = MaterialTheme.typography.bodyLarge,
+                    text = "No connections.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                OutlinedButton(
-                    onClick = { viewModel.requestUnpairConfirm(true) },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !state.isUnpairing,
-                ) {
-                    Text("Unpair")
+            } else {
+                state.connections.forEach { item ->
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(item.partnerLabel, style = MaterialTheme.typography.titleMedium)
+                        Text(item.typeLabel, style = MaterialTheme.typography.bodyMedium)
+                        OutlinedButton(
+                            onClick = { viewModel.requestUnpair(item.relationship.id) },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !state.isUnpairing,
+                        ) {
+                            Text("Unpair")
+                        }
+                    }
                 }
             }
 
@@ -119,13 +130,6 @@ fun SettingsScreen(
                     onCheckedChange = viewModel::setNotificationsEnabled,
                 )
             }
-
-            Text(
-                text = "AI provider keys are configured on the server (Supabase Edge Functions). " +
-                    "See user_setup.md — never put OpenAI secrets in the Android app.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
 
             Text(
                 text = "This app provides AI-guided communication support. It is not a substitute " +

@@ -30,6 +30,20 @@ enum class NotificationType {
     @SerialName("partner_paired") PARTNER_PAIRED,
     @SerialName("session_timeout") SESSION_TIMEOUT,
     @SerialName("partner_unpaired") PARTNER_UNPAIRED,
+    @SerialName("parental_consent_granted") PARENTAL_CONSENT_GRANTED,
+}
+
+@Serializable
+enum class RelationshipType {
+    @SerialName("couples") COUPLES,
+    @SerialName("parent_child") PARENT_CHILD,
+}
+
+@Serializable
+enum class MemberRole {
+    @SerialName("partner") PARTNER,
+    @SerialName("parent") PARENT,
+    @SerialName("child") CHILD,
 }
 
 @Serializable
@@ -40,17 +54,36 @@ data class UserProfile(
     @SerialName("photo_url") val photoUrl: String? = null,
     @SerialName("pair_code") val pairCode: String,
     @SerialName("relationship_id") val relationshipId: String? = null,
+    @SerialName("active_relationship_id") val activeRelationshipId: String? = null,
+    @SerialName("date_of_birth") val dateOfBirth: String? = null,
+    @SerialName("age_attested_at") val ageAttestedAt: String? = null,
+    @SerialName("is_minor") val isMinor: Boolean = false,
     @SerialName("google_id") val googleId: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null,
-)
+) {
+    val hasAgeAttested: Boolean get() = !ageAttestedAt.isNullOrBlank()
+}
 
 @Serializable
 data class Relationship(
     val id: String,
     @SerialName("partner1_id") val partner1Id: String,
     @SerialName("partner2_id") val partner2Id: String? = null,
+    @SerialName("relationship_type") val relationshipType: RelationshipType = RelationshipType.COUPLES,
+    @SerialName("partner1_role") val partner1Role: MemberRole = MemberRole.PARTNER,
+    @SerialName("partner2_role") val partner2Role: MemberRole = MemberRole.PARTNER,
     @SerialName("created_at") val createdAt: String? = null,
+)
+
+@Serializable
+data class ParentalConsent(
+    val id: String? = null,
+    @SerialName("relationship_id") val relationshipId: String,
+    @SerialName("guardian_id") val guardianId: String,
+    @SerialName("minor_id") val minorId: String,
+    @SerialName("consented_at") val consentedAt: String? = null,
+    @SerialName("consent_version") val consentVersion: String? = null,
 )
 
 @Serializable
@@ -147,6 +180,24 @@ data class UserSettings(
 @Serializable
 data class PairRequest(
     @SerialName("partner_code") val partnerCode: String,
+    @SerialName("relationship_type") val relationshipType: RelationshipType = RelationshipType.COUPLES,
+    @SerialName("my_role") val myRole: MemberRole? = null,
+)
+
+@Serializable
+data class AttestAgeRequest(
+    @SerialName("date_of_birth") val dateOfBirth: String,
+)
+
+@Serializable
+data class ConsentParentalRequest(
+    @SerialName("relationship_id") val relationshipId: String,
+    val accept: Boolean = true,
+)
+
+@Serializable
+data class UnpairRequest(
+    @SerialName("relationship_id") val relationshipId: String,
 )
 
 @Serializable
@@ -176,5 +227,43 @@ data class FunctionResult(
     val message: String? = null,
     @SerialName("session_id") val sessionId: String? = null,
     @SerialName("relationship_id") val relationshipId: String? = null,
+    @SerialName("needs_parental_consent") val needsParentalConsent: Boolean = false,
     val data: JsonElement? = null,
 )
+
+/** UI helper: connection row with partner profile + consent state. */
+data class ConnectionItem(
+    val relationship: Relationship,
+    val partner: UserProfile?,
+    val myRole: MemberRole,
+    val needsConsent: Boolean,
+    val canStartTherapy: Boolean,
+) {
+    val typeLabel: String
+        get() = when (relationship.relationshipType) {
+            RelationshipType.COUPLES -> "Couples"
+            RelationshipType.PARENT_CHILD -> "Parent–child"
+        }
+
+    val partnerLabel: String
+        get() {
+            val name = partner?.displayName ?: "Connection"
+            return when (relationship.relationshipType) {
+                RelationshipType.COUPLES -> name
+                RelationshipType.PARENT_CHILD -> {
+                    val theirRole = if (myRole == MemberRole.PARENT) {
+                        relationship.let {
+                            if (it.partner1Role == MemberRole.CHILD || it.partner2Role == MemberRole.CHILD) {
+                                "child"
+                            } else {
+                                "family"
+                            }
+                        }
+                    } else {
+                        "parent"
+                    }
+                    "$name ($theirRole)"
+                }
+            }
+        }
+}
