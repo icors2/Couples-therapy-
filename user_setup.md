@@ -37,24 +37,124 @@ Or paste/run `supabase/migrations/20260717000000_init.sql` in the SQL editor.
 ### Enable Google Auth
 
 1. Supabase → **Authentication → Providers → Google** → enable.
-2. Add your Google **Web Client ID** and **Client Secret** (from Google Cloud Console).
-3. Add redirect URL from the Supabase Google provider screen to Google Cloud **Authorized redirect URIs**.
+2. Add your Google **Web Client ID** and **Client Secret** (from the Web client you create below).
+3. Copy the callback URL shown on that Supabase page (usually  
+   `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback`) — you will paste it into Google Cloud as an **Authorized redirect URI**.
+
+### Confirm Realtime publication
+
+After the migration runs, confirm these tables are on the `supabase_realtime` publication:
+
+1. Supabase → **Database** → **Publications** (sometimes labeled **Replication**).
+2. Open **`supabase_realtime`**.
+3. Ensure **`messages`**, **`sessions`**, and **`notifications`** are listed/enabled.
+
+(This app does **not** use a `com.aicouples.therapy://auth-callback` deep link for sign-in. Auth is native Google ID token → Supabase.)
 
 ---
 
-## 2. Google Cloud OAuth
+## 2. Google Cloud OAuth (step-by-step)
 
-1. Create/select a Google Cloud project.
-2. Configure **OAuth consent screen**.
-3. Create credentials:
-   - **Web application** client (required by Supabase + Credential Manager `serverClientId`)
-   - **Android** client with your package name `com.aicouples.therapy` and SHA-1:
+You need **two** OAuth clients in the same Google Cloud project:
+
+| Client type | Purpose |
+|-------------|---------|
+| **Web application** | Supabase Google provider + Android `GOOGLE_WEB_CLIENT_ID` |
+| **Android** | Lets Google Sign-In work on your device (package name + SHA-1) |
+
+### 2a. OAuth consent screen
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) → select/create a project.
+2. **APIs & Services** → **OAuth consent screen**.
+3. Choose **External** (unless you only use Workspace accounts) → create.
+4. Fill **App name**, **User support email**, and **Developer contact**.
+5. Save. You can leave scopes at defaults for now.
+6. If the app is in **Testing**, add your Google accounts under **Test users**.
+
+“Authorized domains” are added automatically from redirect URIs (e.g. `supabase.co`). You usually do **not** need to type them yourself.
+
+### 2b. Generate the SHA-1 fingerprint (for the Android client)
+
+Google asks for SHA-1 so it can verify your app’s signing certificate. For **local debug builds**, use the Android debug keystore.
+
+**macOS / Linux** (run in a terminal):
 
 ```bash
-keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android
+keytool -list -v \
+  -keystore ~/.android/debug.keystore \
+  -alias androiddebugkey \
+  -storepass android \
+  -keypass android
 ```
 
-4. Put the **Web** client ID into Android `local.properties` as `GOOGLE_WEB_CLIENT_ID`.
+**Windows** (Command Prompt / PowerShell):
+
+```bash
+keytool -list -v -keystore %USERPROFILE%\.android\debug.keystore -alias androiddebugkey -storepass android -keypass android
+```
+
+In the output, find the line:
+
+```text
+SHA1: AB:CD:EF:...
+```
+
+Copy that entire SHA-1 value (colons included).
+
+Notes:
+
+- If `~/.android/debug.keystore` does not exist yet, build/run the app once in Android Studio (or `./gradlew assembleDebug`) — Android Studio creates the debug keystore automatically.
+- `keytool` ships with the JDK. If the command is missing, install a JDK or use Android Studio’s bundled JDK.
+- **Release / Play Store builds use a different SHA-1.** When you publish, add another Android OAuth client (or another SHA-1 on the same client) from Play App Signing / your release keystore.
+
+Optional (if you use Android Studio’s Gradle signing report):
+
+```bash
+./gradlew signingReport
+```
+
+Look under `Variant: debug` → `SHA1`.
+
+### 2c. Create the Web application OAuth client
+
+Redirect URI fields appear **only** when Application type is **Web application**.
+
+1. **APIs & Services** → **Credentials** → **+ Create credentials** → **OAuth client ID**.
+2. **Application type** → **Web application** (not Android, iOS, or Desktop).
+3. Name it e.g. `Supabase Web`.
+4. Under **Authorized redirect URIs** → **Add URI**:
+
+```text
+https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback
+```
+
+5. Leave **Authorized JavaScript origins** empty for this Android setup.
+6. **Create** → copy **Client ID** and **Client secret**.
+
+Then:
+
+- Paste both into Supabase → **Authentication → Providers → Google**.
+- Put the **Client ID only** into Android `local.properties` as `GOOGLE_WEB_CLIENT_ID`.
+
+### 2d. Create the Android OAuth client
+
+1. **Credentials** → **+ Create credentials** → **OAuth client ID**.
+2. **Application type** → **Android**.
+3. Name it e.g. `AI Couples Therapy Debug`.
+4. **Package name:** `com.aicouples.therapy`
+5. **SHA-1 certificate fingerprint:** paste the SHA-1 from section 2b.
+6. **Create**.
+
+You will **not** see Authorized redirect URIs on the Android client — that is normal.
+
+### 2e. What goes where (checklist)
+
+| Value | Where |
+|-------|--------|
+| Web Client ID | Supabase Google provider **and** `local.properties` → `GOOGLE_WEB_CLIENT_ID` |
+| Web Client Secret | Supabase Google provider only (never in the Android app) |
+| Android client (package + SHA-1) | Google Cloud only (enables device Sign-In) |
+| Supabase callback URL | Google **Web** client → Authorized redirect URIs |
 
 ---
 
