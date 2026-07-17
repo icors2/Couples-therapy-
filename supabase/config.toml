@@ -48,3 +48,6 @@ verify_jwt = true
 
 [functions.session-timeout]
 verify_jwt = false
+
+[functions.unpair-partner]
+verify_jwt = true

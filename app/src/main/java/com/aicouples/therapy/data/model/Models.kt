@@ -29,6 +29,7 @@ enum class NotificationType {
     @SerialName("session_ended") SESSION_ENDED,
     @SerialName("partner_paired") PARTNER_PAIRED,
     @SerialName("session_timeout") SESSION_TIMEOUT,
+    @SerialName("partner_unpaired") PARTNER_UNPAIRED,
 }
 
 @Serializable
@@ -78,6 +79,7 @@ data class ChatMessage(
     @SerialName("read_by") val readBy: List<String> = emptyList(),
     @SerialName("token_count") val tokenCount: Int? = null,
     val model: String? = null,
+    val pinned: Boolean = false,
 )
 
 @Serializable
@@ -105,6 +107,9 @@ data class TherapeuticMemoryDocument(
     @SerialName("unresolved_issues") val unresolvedIssues: List<String> = emptyList(),
     @SerialName("strengths") val strengths: List<String> = emptyList(),
     @SerialName("homework") val homework: List<String> = emptyList(),
+    @SerialName("key_facts") val keyFacts: List<String> = emptyList(),
+    @SerialName("partner_a_notes") val partnerANotes: List<String> = emptyList(),
+    @SerialName("partner_b_notes") val partnerBNotes: List<String> = emptyList(),
     @SerialName("sessions_included") val sessionsIncluded: Int = 0,
 )
 

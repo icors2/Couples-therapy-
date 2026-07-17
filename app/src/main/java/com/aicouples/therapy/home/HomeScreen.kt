@@ -112,13 +112,35 @@ fun HomeScreen(
             Text("Settings")
         }
 
-        state.pendingInvite?.let { invite ->
+        if (state.myPendingSessionId != null) {
             Spacer(Modifier.height(8.dp))
-            Text(invite.title, style = MaterialTheme.typography.titleMedium)
-            Text(invite.body, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = "Waiting for ${state.partner?.displayName ?: "your partner"} to join",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = "Your invite stays open for 30 minutes. You can cancel it anytime.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            TextButton(onClick = viewModel::cancelMyInvite) {
+                Text("Cancel invite")
+            }
+        }
+
+        if (state.pendingSessionId != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = state.pendingInvite?.title ?: "Therapy session invite",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = state.pendingInvite?.body
+                    ?: "${state.partner?.displayName ?: "Your partner"} started a therapy session.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button(onClick = { viewModel.joinInvite(onOpenSession) }) {
-                    Text("Join")
+                    Text("Join Therapy")
                 }
                 TextButton(onClick = viewModel::declineInvite) {
                     Text("Decline")

@@ -1,7 +1,9 @@
 package com.aicouples.therapy.therapy.viewmodel
 
+import android.app.Application
+import android.speech.tts.TextToSpeech
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicouples.therapy.common.Result
 import com.aicouples.therapy.data.model.ChatMessage
@@ -14,6 +16,7 @@ import com.aicouples.therapy.data.repository.MessageRepository
 import com.aicouples.therapy.data.repository.RelationshipRepository
 import com.aicouples.therapy.data.repository.SessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.util.Locale
 import javax.inject.Inject
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.Job
@@ -36,20 +39,24 @@ data class TherapyUiState(
     val myRole: MessageSender = MessageSender.PARTNER_A,
     val isSending: Boolean = false,
     val isAiTyping: Boolean = false,
+    val isSpeaking: Boolean = false,
+    val canSpeak: Boolean = false,
     val elapsedLabel: String = "00:00",
     val showEndConfirm: Boolean = false,
+    val selectedMessageId: String? = null,
     val error: String? = null,
     val ended: Boolean = false,
 )
 
 @HiltViewModel
 class TherapyViewModel @Inject constructor(
+    application: Application,
     savedStateHandle: SavedStateHandle,
     private val sessionRepository: SessionRepository,
     private val messageRepository: MessageRepository,
     private val authRepository: AuthRepository,
     private val relationshipRepository: RelationshipRepository,
-) : ViewModel() {
+) : AndroidViewModel(application) {
 
     private val sessionId: String = checkNotNull(savedStateHandle["sessionId"])
 
@@ -57,9 +64,22 @@ class TherapyViewModel @Inject constructor(
     val uiState: StateFlow<TherapyUiState> = _uiState.asStateFlow()
 
     private var timerJob: Job? = null
+    private var typingTimeoutJob: Job? = null
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
 
     init {
+        initTts()
         bootstrap()
+    }
+
+    private fun initTts() {
+        tts = TextToSpeech(getApplication()) { status ->
+            ttsReady = status == TextToSpeech.SUCCESS
+            if (ttsReady) {
+                tts?.language = Locale.getDefault()
+            }
+        }
     }
 
     private fun bootstrap() {
@@ -81,6 +101,7 @@ class TherapyViewModel @Inject constructor(
                     myRole = myRole,
                     session = session,
                     messages = messages,
+                    canSpeak = messages.any { m -> m.sender == MessageSender.AI },
                     ended = session?.status == SessionStatus.ENDED ||
                         session?.status == SessionStatus.DECLINED ||
                         session?.status == SessionStatus.EXPIRED,
@@ -90,18 +111,15 @@ class TherapyViewModel @Inject constructor(
 
             launch {
                 messageRepository.subscribe(sessionId).collect { message ->
-                    _uiState.update { state ->
-                        val exists = state.messages.any { it.id == message.id }
-                        val next = if (exists) state.messages else state.messages + message
-                        state.copy(
-                            messages = next.sortedBy { it.createdAt },
-                            isAiTyping = message.sender == MessageSender.AI,
-                        )
-                    }
-                    if (message.sender == MessageSender.AI) {
-                        delay(400)
-                        _uiState.update { it.copy(isAiTyping = false) }
-                    }
+                    mergeMessage(message)
+                }
+            }
+
+            // Fallback poll — realtime decode can miss inserts on some devices.
+            launch {
+                while (isActive && !_uiState.value.ended) {
+                    delay(2_500)
+                    refreshMessages()
                 }
             }
 
@@ -122,6 +140,36 @@ class TherapyViewModel @Inject constructor(
         }
     }
 
+    private suspend fun refreshMessages() {
+        val remote = runCatching { messageRepository.listMessages(sessionId) }.getOrNull() ?: return
+        _uiState.update { state ->
+            if (remote.size == state.messages.size &&
+                remote.map { it.id } == state.messages.map { it.id }
+            ) {
+                state
+            } else {
+                state.copy(
+                    messages = remote,
+                    isAiTyping = false,
+                    canSpeak = remote.any { it.sender == MessageSender.AI },
+                )
+            }
+        }
+    }
+
+    private suspend fun mergeMessage(message: ChatMessage) {
+        _uiState.update { state ->
+            val exists = state.messages.any { it.id == message.id }
+            val next = if (exists) state.messages else state.messages + message
+            val sorted = next.sortedBy { it.createdAt }
+            state.copy(
+                messages = sorted,
+                isAiTyping = if (message.sender == MessageSender.AI) false else state.isAiTyping,
+                canSpeak = sorted.any { it.sender == MessageSender.AI },
+            )
+        }
+    }
+
     private fun startTimer(startedAt: String?) {
         timerJob?.cancel()
         if (startedAt.isNullOrBlank()) return
@@ -139,8 +187,47 @@ class TherapyViewModel @Inject constructor(
         }
     }
 
+    private fun armTypingTimeout() {
+        typingTimeoutJob?.cancel()
+        typingTimeoutJob = viewModelScope.launch {
+            delay(25_000)
+            _uiState.update { it.copy(isAiTyping = false) }
+        }
+    }
+
     fun onDraftChange(value: String) {
         _uiState.update { it.copy(draft = value) }
+    }
+
+    fun selectMessageForPin(messageId: String?) {
+        _uiState.update { it.copy(selectedMessageId = messageId) }
+    }
+
+    fun togglePin(message: ChatMessage) {
+        val id = message.id ?: return
+        viewModelScope.launch {
+            when (val result = messageRepository.setPinned(id, !message.pinned)) {
+                is Result.Success -> {
+                    _uiState.update { state ->
+                        state.copy(
+                            selectedMessageId = null,
+                            messages = state.messages.map {
+                                if (it.id == id) result.data else it
+                            },
+                        )
+                    }
+                }
+                is Result.Error -> {
+                    _uiState.update {
+                        it.copy(
+                            selectedMessageId = null,
+                            error = result.message ?: "Could not update pin",
+                        )
+                    }
+                }
+                Result.Loading -> Unit
+            }
+        }
     }
 
     fun send() {
@@ -148,6 +235,7 @@ class TherapyViewModel @Inject constructor(
         if (content.isEmpty() || _uiState.value.ended) return
         viewModelScope.launch {
             _uiState.update { it.copy(isSending = true, draft = "", isAiTyping = true, error = null) }
+            armTypingTimeout()
             when (
                 val result = messageRepository.sendMessage(
                     sessionId = sessionId,
@@ -156,16 +244,26 @@ class TherapyViewModel @Inject constructor(
                 )
             ) {
                 is Result.Success -> {
+                    val sent = result.data.message
+                    val clearTyping = result.data.aiWaiting ||
+                        result.data.aiInvokeFailed ||
+                        result.data.aiRespond?.ok == false
                     _uiState.update { state ->
-                        val messages = if (state.messages.any { it.id == result.data.id }) {
+                        val messages = if (state.messages.any { it.id == sent.id }) {
                             state.messages
                         } else {
-                            state.messages + result.data
+                            state.messages + sent
                         }
-                        state.copy(messages = messages, isSending = false)
+                        state.copy(
+                            messages = messages,
+                            isSending = false,
+                            isAiTyping = if (clearTyping) false else state.isAiTyping,
+                        )
                     }
+                    if (clearTyping) typingTimeoutJob?.cancel()
                 }
                 is Result.Error -> {
+                    typingTimeoutJob?.cancel()
                     _uiState.update {
                         it.copy(isSending = false, isAiTyping = false, error = result.message, draft = content)
                     }
@@ -173,6 +271,35 @@ class TherapyViewModel @Inject constructor(
                 Result.Loading -> Unit
             }
         }
+    }
+
+    fun toggleSpeakLatestAi() {
+        val engine = tts ?: return
+        if (_uiState.value.isSpeaking) {
+            engine.stop()
+            _uiState.update { it.copy(isSpeaking = false) }
+            return
+        }
+        val text = _uiState.value.messages
+            .lastOrNull { it.sender == MessageSender.AI }
+            ?.content
+            ?.trim()
+            .orEmpty()
+        if (text.isEmpty() || !ttsReady) return
+        _uiState.update { it.copy(isSpeaking = true) }
+        engine.setOnUtteranceProgressListener(
+            object : android.speech.tts.UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) = Unit
+                override fun onDone(utteranceId: String?) {
+                    _uiState.update { it.copy(isSpeaking = false) }
+                }
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) {
+                    _uiState.update { it.copy(isSpeaking = false) }
+                }
+            },
+        )
+        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "therapy-ai-latest")
     }
 
     fun requestEndConfirm(show: Boolean) {
@@ -183,8 +310,14 @@ class TherapyViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = sessionRepository.endSession(sessionId)) {
                 is Result.Success -> {
+                    tts?.stop()
                     _uiState.update {
-                        it.copy(showEndConfirm = false, ended = true, isAiTyping = false)
+                        it.copy(
+                            showEndConfirm = false,
+                            ended = true,
+                            isAiTyping = false,
+                            isSpeaking = false,
+                        )
                     }
                     onEnded()
                 }
@@ -194,5 +327,13 @@ class TherapyViewModel @Inject constructor(
                 Result.Loading -> Unit
             }
         }
+    }
+
+    override fun onCleared() {
+        typingTimeoutJob?.cancel()
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
+        super.onCleared()
     }
 }

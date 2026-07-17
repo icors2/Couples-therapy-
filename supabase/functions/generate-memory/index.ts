@@ -4,6 +4,7 @@ import { chatCompletion, memoryHandoffSystemPrompt } from "../_shared/openai.ts"
 import { requireUser, serviceClient } from "../_shared/supabase.ts";
 
 const ROLLING_WINDOW = 5;
+const TRANSCRIPT_CAP = 120;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -21,9 +22,24 @@ Deno.serve(async (req) => {
     const { data: session } = await admin.from("sessions").select("*").eq("id", session_id).single();
     if (!session) return jsonResponse({ ok: false, message: "Session not found" }, 404);
 
+    // Idempotency: one memory document per source session.
+    const { data: existing } = await admin
+      .from("ai_memory")
+      .select("*")
+      .eq("source_session_id", session_id)
+      .maybeSingle();
+    if (existing) {
+      return jsonResponse({
+        ok: true,
+        session_id,
+        message: "Memory already generated for this session",
+        data: existing,
+      });
+    }
+
     const { data: messages } = await admin
       .from("messages")
-      .select("sender, content, created_at")
+      .select("sender, content, created_at, pinned")
       .eq("session_id", session_id)
       .order("created_at", { ascending: true });
 
@@ -35,8 +51,32 @@ Deno.serve(async (req) => {
       .limit(1)
       .maybeSingle();
 
-    const transcript = (messages ?? [])
-      .map((m) => `${m.sender}: ${m.content}`)
+    const { data: relationshipSessions } = await admin
+      .from("sessions")
+      .select("id")
+      .eq("relationship_id", session.relationship_id);
+    const sessionIds = (relationshipSessions ?? []).map((s) => s.id);
+    const { data: allPinned } = sessionIds.length
+      ? await admin
+        .from("messages")
+        .select("sender, content")
+        .in("session_id", sessionIds)
+        .eq("pinned", true)
+        .order("created_at", { ascending: true })
+        .limit(50)
+      : { data: [] as { sender: string; content: string }[] };
+
+    const allMessages = messages ?? [];
+    const capped = allMessages.length > TRANSCRIPT_CAP
+      ? allMessages.slice(-TRANSCRIPT_CAP)
+      : allMessages;
+
+    const transcript = capped
+      .map((m) => `${m.pinned ? "[PINNED] " : ""}${m.sender}: ${m.content}`)
+      .join("\n");
+
+    const pinnedBlock = (allPinned ?? [])
+      .map((m) => `- ${m.sender}: ${m.content}`)
       .join("\n");
 
     const completion = await chatCompletion(
@@ -44,10 +84,21 @@ Deno.serve(async (req) => {
         { role: "system", content: memoryHandoffSystemPrompt() },
         {
           role: "user",
-          content: `Prior memory JSON:\n${JSON.stringify(prior?.memory_json ?? {}, null, 2)}\n\nSession transcript:\n${transcript}\n\nProduce the updated therapeutic memory JSON.`,
+          content:
+            `Prior memory JSON:\n${JSON.stringify(prior?.memory_json ?? {}, null, 2)}\n\n` +
+            `Explicitly pinned messages across sessions (MUST appear in key_facts with full wording):\n` +
+            `${pinnedBlock || "(none)"}\n\n` +
+            (allMessages.length > TRANSCRIPT_CAP
+              ? `(Transcript capped to last ${TRANSCRIPT_CAP} of ${allMessages.length} messages.)\n`
+              : "") +
+            `Session transcript:\n${transcript}\n\n` +
+            `Produce the updated therapeutic memory JSON. ` +
+            `IMPORTANT: copy any concrete lists/facts partners stated (colors, numbers, names, preferences) ` +
+            `into key_facts / partner_a_notes / partner_b_notes with the actual values — do not only note that they "will list" them. ` +
+            `Every pinned message above must be reflected in key_facts.`,
         },
       ],
-      { temperature: 0.3, json: true },
+      { temperature: 0.2, json: true },
     );
 
     let memoryJson: Record<string, unknown>;
@@ -68,10 +119,27 @@ Deno.serve(async (req) => {
         version: nextVersion,
         memory_json: memoryJson,
         sessions_included: nextSessionsIncluded,
+        source_session_id: session_id,
       })
       .select("*")
       .single();
-    if (error) return jsonResponse({ ok: false, message: error.message }, 500);
+    if (error) {
+      // Race: another caller inserted first for this session.
+      if (error.code === "23505") {
+        const { data: raced } = await admin
+          .from("ai_memory")
+          .select("*")
+          .eq("source_session_id", session_id)
+          .maybeSingle();
+        return jsonResponse({
+          ok: true,
+          session_id,
+          message: "Memory already generated for this session",
+          data: raced,
+        });
+      }
+      return jsonResponse({ ok: false, message: error.message }, 500);
+    }
 
     // Compress every 5 sessions into an archive and reset rolling counter in a new doc.
     if (nextSessionsIncluded > 0 && nextSessionsIncluded % ROLLING_WINDOW === 0) {
@@ -89,7 +157,6 @@ Deno.serve(async (req) => {
         summary: memoryJson,
       });
 
-      // Compression pass: summarize archive into a compact long-term seed
       const compressed = await chatCompletion(
         [
           { role: "system", content: memoryHandoffSystemPrompt() },

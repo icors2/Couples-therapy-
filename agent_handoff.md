@@ -11,6 +11,7 @@ Use this file when continuing work in a **local Cursor IDE** (or any new agent s
 | GitHub | `https://github.com/icors2/Couples-therapy-.git` |
 | Working branch | `cursor/ai-couples-therapy-app-3493` (**ahead of `main`**) |
 | Base branch | `main` |
+| Latest push | `8dc911f` — Google Sign-In Activity context fix + setup doc updates |
 | Package name | `com.aicouples.therapy` |
 | App module | Android (Kotlin + Jetpack Compose + Hilt + Supabase) |
 
@@ -21,11 +22,11 @@ git clone -b cursor/ai-couples-therapy-app-3493 https://github.com/icors2/Couple
 cd Couples-therapy-
 ```
 
-Open that folder in Android Studio **and** Cursor.
+Open that folder in Android Studio **and** Cursor (user may run Android Studio alone when free RAM is needed for the emulator).
 
 ---
 
-## What already exists (built in cloud agent)
+## What already exists (built in cloud agent + local fixes)
 
 Full greenfield implementation from `Initial plan.md`:
 
@@ -33,30 +34,90 @@ Full greenfield implementation from `Initial plan.md`:
 - Supabase SQL migration + RLS + realtime publication: `supabase/migrations/20260717000000_init.sql`
 - Edge Functions under `supabase/functions/` (`pair-partner`, `start-session`, `join-session`, `decline-session`, `ai-respond`, `generate-memory`, `end-session`, `session-timeout`)
 - CI: `.github/workflows/android-build.yml`
-- Setup docs: `user_setup.md`, `README.md`
-- Unit tests pass; `assembleDebug` succeeded in the cloud environment
+- Setup docs: `user_setup.md`, `README.md`, this handoff
+- Local `assembleDebug` succeeds (with Android Studio JBR as `JAVA_HOME` if needed)
 
 ### Intentional plan corrections (do not “fix” these back)
 
 1. AI must **not** claim to be a licensed therapist.
-2. **OpenAI key is server-side only** (Edge Functions). Never put it in the Android app.
+2. **OpenAI key is server-side only** (Edge Functions). Never put it in the Android app. Architecture already uses `ai-respond` / `generate-memory` — no BYOK client path.
 3. Full chat transcripts stay in `messages`; structured memory rolls in `ai_memory` / `ai_archives`.
 4. 10-minute inactivity end is **server-side** (`session-timeout`), not client-only.
 5. No `com.aicouples.therapy://auth-callback` deep link is required — auth is native Google ID token → Supabase.
 
+### Local fixes already shipped (do not re-do)
+
+1. **Google Sign-In Activity context** — Credential Manager was using `@ApplicationContext`, which cannot show the account picker (`Failed to launch the selector UI`). Fixed in `AuthRepository` / `AuthScreen` / `AuthViewModel` to pass Activity context. Pushed in `8dc911f`.
+2. **Windows `sdk.dir`** — backslashes in `local.properties` caused `Invalid file path`. Use forward slashes (`C:/Users/.../Android/Sdk`). Documented in `user_setup.md` + `local.properties.example`.
+3. **`user_setup.md` cron section** — SQL Editor path for `pg_cron` + `pg_net` (Dashboard Cron UI may be hard to find).
+
 ---
 
-## Where the human is right now (setup in progress)
+## Where the human is right now (2026-07-17)
 
-As of handoff, the user is configuring **Google Cloud OAuth** so they can finish Sign-In:
+Setup is mid-flight on a Windows machine. User is **closing Cursor** to free RAM so **Android Studio can run a phone emulator**.
 
-1. Creating Google Cloud **Web** + **Android** OAuth clients
-2. About to generate **SHA-1 on their Windows machine** via Android Studio / `.\gradlew signingReport`
-3. Supabase project / secrets / function deploy may still be incomplete — verify with them
+### Done / mostly done
 
-**Important:** SHA-1 must be generated **locally** (their debug keystore), not in a cloud agent VM. Cloud keystores will not match APKs they install from their laptop.
+- [x] Branch `cursor/ai-couples-therapy-app-3493` checked out locally
+- [x] `local.properties` filled (Supabase URL, anon key, Google Web Client ID) — **do not commit**
+- [x] Debug APK builds (`assembleDebug` OK)
+- [x] App installed and launched on a physical device
+- [x] Google account picker UI works after Activity-context fix
+- [x] OpenAI intended as Edge Function secrets only (server-side)
 
-### SHA-1 (Windows, project root)
+### Blocked / verify next (auth)
+
+Last on-device error after picking a Google account:
+
+```text
+Provider (issuer "https://accounts.google.com") is not enabled
+```
+
+That means Supabase Auth **Google provider** was not enabled (or missing Web Client ID + Secret).
+
+**User action (Supabase Dashboard):**
+
+1. **Authentication → Providers → Google** → enable
+2. Paste **Web** Client ID + Client Secret (same Web Client ID as `GOOGLE_WEB_CLIENT_ID` in `local.properties`)
+3. Ensure Google Cloud **Web** OAuth client has redirect:  
+   `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback`
+
+After that, Sign-In should complete without a rebuild (if Client ID already matches).
+
+### Live DB aligned to app (2026-07-17)
+
+Project was originally on a divergent schema (`therapy_sessions`, `user_settings`, `read_at`, etc.). Aligned via:
+
+- `supabase/migrations/20260717100000_notifications_is_read.sql`
+- `supabase/migrations/20260717103000_align_live_schema_to_app.sql` (applied with `supabase db query --linked`)
+- Migration history repaired so `20260717000000` / `20260717100000` / `20260717103000` are marked **applied**
+
+**Preserved:** 2 profiles, 1 relationship, auth users.  
+**Recreated to match app:** `sessions`, `messages`, `settings`, `ai_memory`, `ai_archives`, RLS, realtime (`messages`/`sessions`/`notifications`), `expire_inactive_sessions`, `handle_new_user` → `settings`.  
+**Removed:** `therapy_sessions`, `user_settings`, `device_tokens`, old SQL RPCs.
+
+**Verified:** all 8 Edge Functions are ACTIVE (`pair-partner`, `start-session`, `join-session`, `decline-session`, `ai-respond`, `generate-memory`, `end-session`, `session-timeout`).
+
+### Still incomplete (backend / E2E)
+
+- [x] Live schema aligned with app
+- [x] Realtime publication includes `messages`, `sessions`, `notifications`
+- [x] Edge Functions deployed (all 8 ACTIVE)
+- [ ] Edge Function secrets: confirm `OPENAI_API_KEY` (+ optional `OPENAI_MODEL`, `CRON_SECRET`)
+- [ ] `session-timeout` cron scheduled (SQL Editor path in `user_setup.md` §3)
+- [x] Google Sign-In works
+- [x] Pairing works (two accounts; pairing preserved after schema align)
+- [x] Retest Home / Join Therapy / live chat (polling + realtime fixes)
+- [x] AI memory prompts + `key_facts` + direct-question reply heuristic deployed (`ai-respond`, `generate-memory`)
+- [x] Explicit message pin (long-press → Pin for AI); `messages.pinned`; pinned facts injected into AI prompts
+- [ ] Retest pin + memory recall after reinstalling debug APK
+
+### Emulator note
+
+Full couples smoke test needs **two Google accounts** (cannot pair with own code). Lightest path: phone + emulator, or two emulators. Progressive checks (sign-in alone, then `session-timeout` POST with `x-cron-secret`) are documented in conversation; can be added to `user_setup.md` if useful.
+
+### SHA-1 (Windows, if Android OAuth client still missing)
 
 ```bash
 .\gradlew signingReport
@@ -74,29 +135,14 @@ Use the **debug** SHA-1 + package `com.aicouples.therapy` on the Google **Androi
 
 ## What the local agent should help with next
 
-Prioritize finishing setup, not rewriting the app unless asked.
+Prioritize finishing setup / runtime auth, not rewriting the app unless asked.
 
-### Checklist
+1. Confirm Google provider enabled in Supabase → Sign-In succeeds.
+2. Confirm migration + Edge Function secrets + deploys.
+3. Help run emulator / second account for pairing smoke test.
+4. Debug AI response path via Edge Function logs if chat fails after pairing.
 
-- [ ] Confirm branch `cursor/ai-couples-therapy-app-3493` is checked out locally
-- [ ] Android Studio syncs Gradle successfully
-- [ ] User has Google **Web** OAuth client with redirect:
-  `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback`
-- [ ] User has Google **Android** OAuth client (package + local SHA-1)
-- [ ] Supabase Google provider has Web Client ID + Secret
-- [ ] `local.properties` created from `local.properties.example` with:
-  - `sdk.dir=...`
-  - `SUPABASE_URL=...`
-  - `SUPABASE_ANON_KEY=...`
-  - `GOOGLE_WEB_CLIENT_ID=...` (**Web** client ID, not Android)
-- [ ] Migration applied (`supabase db push` or SQL editor)
-- [ ] Realtime publication includes `messages`, `sessions`, `notifications`
-- [ ] Edge Function secrets: `OPENAI_API_KEY` (+ optional `OPENAI_MODEL`, `CRON_SECRET`)
-- [ ] Edge Functions deployed
-- [ ] App runs on device/emulator; Google Sign-In works
-- [ ] Pair two accounts → Start Therapy → chat → End Session → `ai_memory` row appears
-
-Full instructions live in **`user_setup.md`** (Google section was expanded with Web vs Android, redirect URIs, SHA-1, Realtime).
+Full instructions: **`user_setup.md`**.
 
 ---
 
@@ -115,16 +161,19 @@ Do **not** commit `local.properties`, API keys, or service role keys.
 
 ---
 
-## Useful commands (local)
+## Useful commands (local Windows)
 
-```bash
+```powershell
+# JAVA_HOME if gradle complains (Android Studio JBR)
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+
 # Build + unit tests
 .\gradlew testDebugUnitTest assembleDebug
 
 # Debug signing / SHA-1
 .\gradlew signingReport
 
-# Install debug APK (device connected)
+# Install debug APK
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
@@ -139,12 +188,16 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 | Generating SHA-1 in cloud agent | Must be local debug keystore SHA-1 |
 | Expecting `therapy_sessions` table | Table is named **`sessions`** |
 | Needing `com.aicouples.therapy://auth-callback` | Not used by current auth flow |
+| Credential Manager + Application context | Must use **Activity** context (fixed) |
+| Windows `sdk.dir` with `\` | Use forward slashes or escaped path |
+| `Provider … accounts.google.com is not enabled` | Enable Google under Supabase Auth → Providers |
+| Can’t find Dashboard “Cron” / pg_net menu | Use SQL Editor (`user_setup.md` Option B) |
 
 ---
 
 ## PR status
 
-Branch was pushed; a draft PR was prepared but may require the user to create/approve it in GitHub UI (auto-create was blocked by user settings). Base: `main` ← `cursor/ai-couples-therapy-app-3493`.
+Branch pushed to origin. Draft PR may still need user create/approve in GitHub UI. Base: `main` ← `cursor/ai-couples-therapy-app-3493`.
 
 ---
 
@@ -154,3 +207,4 @@ Branch was pushed; a draft PR was prepared but may require the user to create/ap
 2. Prefer fixing setup/runtime issues (auth, pairing, realtime, AI functions).
 3. Keep secrets out of git; update `user_setup.md` if setup steps change.
 4. After code changes: commit on `cursor/ai-couples-therapy-app-3493` and push.
+5. Refresh this handoff when setup milestones complete.

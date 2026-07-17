@@ -3,7 +3,8 @@ import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { serviceClient } from "../_shared/supabase.ts";
 
 /**
- * Scheduled job: end sessions idle for 10+ minutes, then generate memory handoffs.
+ * Scheduled job: end sessions idle for 10+ minutes, cancel pending invites after 30m,
+ * then generate memory handoffs for newly expired active sessions.
  * Protect with a shared CRON_SECRET header when verify_jwt is false.
  */
 Deno.serve(async (req) => {
@@ -20,6 +21,7 @@ Deno.serve(async (req) => {
     const admin = serviceClient();
     const { data: expiredIds, error } = await admin.rpc("expire_inactive_sessions", {
       timeout_minutes: 10,
+      pending_timeout_minutes: 30,
     });
     if (error) return jsonResponse({ ok: false, message: error.message }, 500);
 

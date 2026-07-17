@@ -108,6 +108,13 @@ fun TherapyNavHost(
                         popUpTo(0) { inclusive = true }
                     }
                 },
+                onUnpaired = {
+                    authViewModel.refreshProfile()
+                    navController.navigate(Routes.PAIRING) {
+                        popUpTo(0) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
             )
         }
     }

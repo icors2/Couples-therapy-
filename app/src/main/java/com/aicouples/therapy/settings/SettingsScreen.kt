@@ -9,14 +9,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,9 +34,40 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 fun SettingsScreen(
     onBack: () -> Unit,
     onSignedOut: () -> Unit,
+    onUnpaired: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+
+    if (state.showUnpairConfirm) {
+        AlertDialog(
+            onDismissRequest = { viewModel.requestUnpairConfirm(false) },
+            title = { Text("Unpair from partner?") },
+            text = {
+                Text(
+                    "This deletes all shared sessions and AI memory for you and " +
+                        "${state.partnerName ?: "your partner"}. Pair codes will be regenerated. " +
+                        "This cannot be undone.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { viewModel.unpair(onUnpaired) },
+                    enabled = !state.isUnpairing,
+                ) {
+                    Text(if (state.isUnpairing) "Unpairing…" else "Unpair")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { viewModel.requestUnpairConfirm(false) },
+                    enabled = !state.isUnpairing,
+                ) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -60,6 +94,20 @@ fun SettingsScreen(
             Text(state.email, style = MaterialTheme.typography.bodyMedium)
             Text("Pair code: ${state.pairCode}", style = MaterialTheme.typography.bodyMedium)
 
+            if (state.isPaired) {
+                Text(
+                    text = "Paired with ${state.partnerName ?: "your partner"}",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                OutlinedButton(
+                    onClick = { viewModel.requestUnpairConfirm(true) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.isUnpairing,
+                ) {
+                    Text("Unpair")
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -85,6 +133,10 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            state.error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error)
+            }
 
             Button(
                 onClick = { viewModel.signOut(onSignedOut) },

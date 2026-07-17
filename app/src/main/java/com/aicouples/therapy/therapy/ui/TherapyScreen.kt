@@ -3,7 +3,11 @@ package com.aicouples.therapy.therapy.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,15 +18,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.MicNone
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -30,6 +38,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -40,6 +49,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -135,6 +146,12 @@ fun TherapyScreen(
                     MessageBubble(
                         message = message,
                         isMine = message.sender == state.myRole,
+                        selected = state.selectedMessageId != null && state.selectedMessageId == message.id,
+                        onLongPress = {
+                            message.id?.let(viewModel::selectMessageForPin)
+                        },
+                        onDismissPinMenu = { viewModel.selectMessageForPin(null) },
+                        onTogglePin = { viewModel.togglePin(message) },
                     )
                 }
                 item {
@@ -161,8 +178,22 @@ fun TherapyScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
-                    IconButton(onClick = { /* voice placeholder */ }) {
-                        Icon(Icons.Default.MicNone, contentDescription = "Voice (coming soon)")
+                    IconButton(
+                        onClick = viewModel::toggleSpeakLatestAi,
+                        enabled = state.canSpeak,
+                    ) {
+                        Icon(
+                            imageVector = if (state.isSpeaking) {
+                                Icons.AutoMirrored.Filled.VolumeOff
+                            } else {
+                                Icons.AutoMirrored.Filled.VolumeUp
+                            },
+                            contentDescription = if (state.isSpeaking) {
+                                "Stop speaking"
+                            } else {
+                                "Read latest therapist reply"
+                            },
+                        )
                     }
                     OutlinedTextField(
                         value = state.draft,
@@ -203,11 +234,17 @@ fun TherapyScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
     isMine: Boolean,
+    selected: Boolean,
+    onLongPress: () -> Unit,
+    onDismissPinMenu: () -> Unit,
+    onTogglePin: () -> Unit,
 ) {
+    val haptics = LocalHapticFeedback.current
     val bubbleColor = when (message.sender) {
         MessageSender.PARTNER_A -> PartnerAColor
         MessageSender.PARTNER_B -> PartnerBColor
@@ -231,12 +268,37 @@ private fun MessageBubble(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = horizontalAlignment,
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        AnimatedVisibility(
+            visible = selected,
+            enter = fadeIn() + scaleIn(),
+            exit = fadeOut() + scaleOut(),
+        ) {
+            PinActionBar(
+                pinned = message.pinned,
+                onTogglePin = onTogglePin,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-        )
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (message.pinned) {
+                Icon(
+                    imageVector = Icons.Default.PushPin,
+                    contentDescription = "Pinned for AI memory",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(18.dp))
@@ -245,6 +307,22 @@ private fun MessageBubble(
                         MaterialTheme.colorScheme.surfaceVariant
                     } else {
                         bubbleColor
+                    },
+                )
+                .then(
+                    if (selected) {
+                        Modifier.background(Color.White.copy(alpha = 0.12f))
+                    } else {
+                        Modifier
+                    },
+                )
+                .combinedClickable(
+                    onClick = {
+                        if (selected) onDismissPinMenu()
+                    },
+                    onLongClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onLongPress()
                     },
                 )
                 .padding(horizontal = 14.dp, vertical = 10.dp),
@@ -266,6 +344,54 @@ private fun MessageBubble(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
             )
+        }
+    }
+}
+
+@Composable
+private fun PinActionBar(
+    pinned: Boolean,
+    onTogglePin: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        tonalElevation = 4.dp,
+        shadowElevation = 6.dp,
+        modifier = modifier,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            Surface(
+                onClick = onTogglePin,
+                shape = CircleShape,
+                color = if (pinned) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                } else {
+                    Color.Transparent
+                },
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PushPin,
+                        contentDescription = if (pinned) "Unpin" else "Pin",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Text(
+                        text = if (pinned) "Unpin" else "Pin for AI",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                }
+            }
         }
     }
 }

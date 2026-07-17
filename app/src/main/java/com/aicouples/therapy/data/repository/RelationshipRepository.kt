@@ -51,5 +51,10 @@ class RelationshipRepository @Inject constructor(
         response.body<FunctionResult>()
     }
 
+    suspend fun unpair(): Result<FunctionResult> = runCatchingResultSuspend {
+        val response = client.functions.invoke(function = "unpair-partner")
+        response.body<FunctionResult>()
+    }
+
     suspend fun refreshProfile(): UserProfile? = authRepository.getProfile()
 }
