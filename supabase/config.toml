@@ -1,0 +1,50 @@
+# Minimal Supabase CLI config for local development / linking.
+# Create a project in the dashboard, then run: supabase link --project-ref <ref>
+
+project_id = "ai-couples-therapy"
+
+[api]
+enabled = true
+port = 54321
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+
+[auth.external.google]
+enabled = true
+# Set via `supabase secrets` / dashboard — do not commit client secrets.
+client_id = "env(GOOGLE_CLIENT_ID)"
+secret = "env(GOOGLE_CLIENT_SECRET)"
+
+[functions.ai-respond]
+verify_jwt = true
+
+[functions.generate-memory]
+verify_jwt = true
+
+[functions.end-session]
+verify_jwt = true
+
+[functions.pair-partner]
+verify_jwt = true
+
+[functions.start-session]
+verify_jwt = true
+
+[functions.join-session]
+verify_jwt = true
+
+[functions.decline-session]
+verify_jwt = true
+
+[functions.session-timeout]
+verify_jwt = false

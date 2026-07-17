@@ -1,0 +1,9 @@
+## Copy this file to local.properties and fill in values from user_setup.md
+sdk.dir=/path/to/Android/sdk
+
+# Supabase (public / publishable values — safe for the client)
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_OR_PUBLISHABLE_KEY
+
+# Google Sign-In Web Client ID (from Google Cloud Console / Supabase Auth provider)
+GOOGLE_WEB_CLIENT_ID=YOUR_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com

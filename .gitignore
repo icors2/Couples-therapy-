@@ -1,0 +1,42 @@
+# Built application files
+*.apk
+*.ap_
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+build/
+.gradle/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Local configuration
+local.properties
+*.iml
+.idea/
+.DS_Store
+
+# Kotlin
+.kotlin/
+
+# Secrets / keys
+google-services.json
+**/secrets.properties
+.env
+.env.*
+
+# Supabase CLI local
+supabase/.branches
+supabase/.temp
+
+# Logs
+*.log
