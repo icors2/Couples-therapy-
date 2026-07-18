@@ -31,6 +31,7 @@ enum class NotificationType {
     @SerialName("session_timeout") SESSION_TIMEOUT,
     @SerialName("partner_unpaired") PARTNER_UNPAIRED,
     @SerialName("parental_consent_granted") PARENTAL_CONSENT_GRANTED,
+    @SerialName("intake_completed") INTAKE_COMPLETED,
 }
 
 @Serializable
@@ -201,6 +202,50 @@ data class UnpairRequest(
 )
 
 @Serializable
+data class IntakeAnswers(
+    val goals: String = "",
+    @SerialName("main_concerns") val mainConcerns: String = "",
+    @SerialName("want_from_sessions") val wantFromSessions: String = "",
+    val strengths: String = "",
+    @SerialName("communication_wish") val communicationWish: String = "",
+    @SerialName("anything_else") val anythingElse: String = "",
+    @SerialName("safety_concern") val safetyConcern: Boolean = false,
+    @SerialName("safety_note") val safetyNote: String = "",
+    /** Parent concerns / child "what feels hard" for parent–child connections. */
+    @SerialName("role_notes") val roleNotes: String = "",
+)
+
+@Serializable
+data class RelationshipIntake(
+    val id: String? = null,
+    @SerialName("relationship_id") val relationshipId: String,
+    @SerialName("user_id") val userId: String,
+    val answers: IntakeAnswers = IntakeAnswers(),
+    @SerialName("completed_at") val completedAt: String? = null,
+)
+
+@Serializable
+data class SubmitIntakeRequest(
+    @SerialName("relationship_id") val relationshipId: String,
+    val answers: IntakeAnswers,
+)
+
+@Serializable
+data class IntakeStatusRequest(
+    @SerialName("relationship_id") val relationshipId: String,
+)
+
+@Serializable
+data class IntakeStatus(
+    val ok: Boolean = true,
+    val message: String? = null,
+    @SerialName("relationship_id") val relationshipId: String? = null,
+    @SerialName("me_done") val meDone: Boolean = false,
+    @SerialName("partner_done") val partnerDone: Boolean = false,
+    val required: Boolean = true,
+)
+
+@Serializable
 data class StartSessionRequest(
     @SerialName("relationship_id") val relationshipId: String,
 )
@@ -238,7 +283,13 @@ data class ConnectionItem(
     val myRole: MemberRole,
     val needsConsent: Boolean,
     val canStartTherapy: Boolean,
+    val intakeRequired: Boolean = false,
+    val intakeMeDone: Boolean = false,
+    val intakePartnerDone: Boolean = false,
 ) {
+    val needsMyIntake: Boolean get() = intakeRequired && !intakeMeDone
+    val waitingPartnerIntake: Boolean get() = intakeRequired && intakeMeDone && !intakePartnerDone
+
     val typeLabel: String
         get() = when (relationship.relationshipType) {
             RelationshipType.COUPLES -> "Couples"

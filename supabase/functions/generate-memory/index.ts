@@ -105,7 +105,7 @@ Deno.serve(async (req) => {
             `Every pinned message above must be reflected in key_facts.`,
         },
       ],
-      { temperature: 0.2, json: true },
+      { temperature: 0.2, json: true, purpose: "memory" },
     );
 
     let memoryJson: Record<string, unknown>;
@@ -172,7 +172,7 @@ Deno.serve(async (req) => {
             content: `Compress this rolling memory of ${ROLLING_WINDOW} sessions into a durable long-term memory seed. Keep structure identical. sessions_included should be ${ROLLING_WINDOW}.\n\n${JSON.stringify(memoryJson)}`,
           },
         ],
-        { temperature: 0.2, json: true },
+        { temperature: 0.2, json: true, purpose: "memory" },
       );
       let compressedJson: Record<string, unknown> = memoryJson;
       try {

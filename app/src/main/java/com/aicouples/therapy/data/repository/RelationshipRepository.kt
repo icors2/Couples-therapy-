@@ -25,6 +25,7 @@ import javax.inject.Singleton
 class RelationshipRepository @Inject constructor(
     private val client: SupabaseClient,
     private val authRepository: AuthRepository,
+    private val intakeRepository: IntakeRepository,
 ) {
     suspend fun listRelationships(): List<Relationship> {
         val me = authRepository.getProfile() ?: return emptyList()
@@ -76,10 +77,19 @@ class RelationshipRepository @Inject constructor(
             val needsConsent = rel.relationshipType == RelationshipType.PARENT_CHILD &&
                 hasMinor &&
                 consent == null
+            val intake = when (val status = intakeRepository.getStatus(rel.id)) {
+                is Result.Success -> status.data
+                else -> null
+            }
+            val intakeRequired = intake?.required == true
+            val intakeMeDone = intake?.meDone == true
+            val intakePartnerDone = intake?.partnerDone == true
+            val intakeReady = !intakeRequired || (intakeMeDone && intakePartnerDone)
             val canStart = when {
                 me.isMinor && consent == null -> false
                 needsConsent -> false
                 rel.relationshipType == RelationshipType.COUPLES && (me.isMinor || partner?.isMinor == true) -> false
+                !intakeReady -> false
                 else -> true
             }
             ConnectionItem(
@@ -88,6 +98,9 @@ class RelationshipRepository @Inject constructor(
                 myRole = myRole,
                 needsConsent = needsConsent,
                 canStartTherapy = canStart,
+                intakeRequired = intakeRequired,
+                intakeMeDone = intakeMeDone,
+                intakePartnerDone = intakePartnerDone,
             )
         }
     }

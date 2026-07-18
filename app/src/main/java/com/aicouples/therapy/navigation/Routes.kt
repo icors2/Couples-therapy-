@@ -9,6 +9,8 @@ object Routes {
     const val THERAPY = "therapy/{sessionId}"
     const val HISTORY = "history"
     const val SETTINGS = "settings"
+    const val INTAKE = "intake/{relationshipId}"
 
     fun therapy(sessionId: String) = "therapy/$sessionId"
+    fun intake(relationshipId: String) = "intake/$relationshipId"
 }

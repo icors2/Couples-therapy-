@@ -67,7 +67,8 @@ class HomeViewModel @Inject constructor(
                     }
                 }
                 if (notification.type == NotificationType.PARENTAL_CONSENT_GRANTED ||
-                    notification.type == NotificationType.PARTNER_PAIRED
+                    notification.type == NotificationType.PARTNER_PAIRED ||
+                    notification.type == NotificationType.INTAKE_COMPLETED
                 ) {
                     refresh()
                 }
@@ -156,6 +157,21 @@ class HomeViewModel @Inject constructor(
             }
             if (selected.needsConsent && selected.myRole == MemberRole.PARENT) {
                 _uiState.update { it.copy(showConsentForId = selected.relationship.id) }
+                return@launch
+            }
+            if (selected.needsMyIntake) {
+                _uiState.update {
+                    it.copy(error = "Complete your private intake before starting therapy")
+                }
+                return@launch
+            }
+            if (selected.waitingPartnerIntake) {
+                _uiState.update {
+                    it.copy(
+                        error = "Waiting for ${selected.partner?.displayName ?: "them"} " +
+                            "to finish their private intake",
+                    )
+                }
                 return@launch
             }
             if (!selected.canStartTherapy) {

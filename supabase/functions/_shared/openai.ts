@@ -67,11 +67,39 @@ function roleLabels(ctx?: RelationshipPromptContext): string {
   return `This is a parent–child dyad. Prefer labels "${a}" (partner_a) and "${b}" (partner_b) in your understanding.`;
 }
 
+const FIRST_SESSION_INTAKE_AGENDA = `
+First-session intake agenda (guided information gathering):
+- Greet both people warmly and set brief ground rules (respect, no interrupting, you facilitate).
+- You have private intake answers from each person (below). Use them to understand goals and concerns.
+- Reflect themes in general terms — do NOT quote private secrets verbatim or reveal one person's
+  private answers to the other.
+- Ask clarifying questions to deepen understanding; keep the pace calm and structured.
+- Near the end, propose a shared focus for next time and one small practice if appropriate.
+- If a safety_concern flag is set, prioritize safety, grounding, and appropriate crisis resources
+  without exposing private details unnecessarily.`;
+
+/** Format private intakes for the system prompt only (never echo raw text to the chat UI). */
+export function formatIntakeBlock(
+  intakes: Array<{ label: string; answers: unknown }>,
+): string {
+  if (!intakes.length) return "";
+  const parts = intakes.map(({ label, answers }) => {
+    const a = (answers && typeof answers === "object") ? answers as Record<string, unknown> : {};
+    return `${label}:\n${JSON.stringify(a, null, 2)}`;
+  });
+  return (
+    `\n\nPrivate intake forms (CONFIDENTIAL — for you only; never paste another person's ` +
+    `answers into chat or attribute private details to the wrong person):\n` +
+    parts.join("\n\n")
+  );
+}
+
 export function therapistSystemPrompt(
   memoryJson: unknown,
   isFirstSession: boolean,
   workingSummary?: string | null,
   ctx?: RelationshipPromptContext,
+  intakeBlock?: string | null,
 ): string {
   const base = ctx?.relationshipType === "parent_child" ? FAMILY_SYSTEM : COUPLES_SYSTEM;
   const trimmed = trimMemoryForPrompt(memoryJson);
@@ -82,12 +110,16 @@ export function therapistSystemPrompt(
     ? `\n\nWorking summary of earlier turns in this session:\n${workingSummary.trim()}`
     : "";
   const continuity = isFirstSession
-    ? "This may be an early session. Establish safety and rapport."
+    ? (intakeBlock
+      ? "This is the first guided session after private intakes. Establish safety and rapport."
+      : "This may be an early session. Establish safety and rapport.")
     : ctx?.relationshipType === "parent_child"
     ? "You are continuing with this parent–child pair. Maintain continuity using the memory JSON."
     : "You are continuing therapy with this couple. Maintain continuity using the memory JSON. Prefer recalling saved facts over asking them to repeat.";
+  const agenda = isFirstSession && intakeBlock ? `\n${FIRST_SESSION_INTAKE_AGENDA}` : "";
+  const intake = intakeBlock?.trim() ? intakeBlock : "";
   const minor = ctx?.includesMinor ? `\n${MINOR_SAFETY}` : "";
-  return `${base}\n\n${roleLabels(ctx)}\n\n${continuity}${memoryBlock}${summaryBlock}${minor}`;
+  return `${base}\n\n${roleLabels(ctx)}\n\n${continuity}${agenda}${intake}${memoryBlock}${summaryBlock}${minor}`;
 }
 
 export function memoryHandoffSystemPrompt(relationshipType?: string): string {
@@ -122,14 +154,34 @@ Rules:
 - Be concise and clinically careful.`;
 }
 
+export type ChatCompletionPurpose = "chat" | "memory";
+
+/** Resolve OpenAI model: purpose-specific secret → OPENAI_MODEL → purpose default. */
+export function resolveOpenAiModel(
+  purpose: ChatCompletionPurpose = "chat",
+  explicit?: string,
+): string {
+  if (explicit?.trim()) return explicit.trim();
+  const legacy = Deno.env.get("OPENAI_MODEL")?.trim();
+  if (purpose === "memory") {
+    return Deno.env.get("OPENAI_MEMORY_MODEL")?.trim() || legacy || "gpt-4o-mini";
+  }
+  return Deno.env.get("OPENAI_CHAT_MODEL")?.trim() || legacy || "gpt-4o";
+}
+
 export async function chatCompletion(
   messages: ChatMessage[],
-  options: { temperature?: number; json?: boolean } = {},
+  options: {
+    temperature?: number;
+    json?: boolean;
+    purpose?: ChatCompletionPurpose;
+    model?: string;
+  } = {},
 ): Promise<{ content: string; model: string; tokens?: number }> {
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
-  const model = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini";
+  const model = resolveOpenAiModel(options.purpose ?? "chat", options.model);
   const body: Record<string, unknown> = {
     model,
     messages,
@@ -183,9 +235,12 @@ export function shouldAiRespond(
   recentUserMessages: number,
   lastSender: string,
   lastContent = "",
+  isFirstSession = false,
 ): boolean {
   if (lastSender === "ai" || lastSender === "system") return false;
   if (isDirectAiAddress(lastContent)) return true;
+  // Guided first session: respond after each partner turn so the facilitator can lead.
+  if (isFirstSession) return recentUserMessages >= 1;
   if (recentUserMessages < 2) return false;
   return recentUserMessages % 2 === 0;
 }

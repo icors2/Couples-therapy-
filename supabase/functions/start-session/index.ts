@@ -90,6 +90,26 @@ Deno.serve(async (req) => {
       });
     }
 
+    // First therapy for this connection: both members must complete private intake.
+    const { count: endedCount } = await admin
+      .from("sessions")
+      .select("*", { count: "exact", head: true })
+      .eq("relationship_id", relationship_id)
+      .eq("status", "ended");
+    if ((endedCount ?? 0) === 0) {
+      const { data: intakes } = await admin
+        .from("relationship_intakes")
+        .select("user_id")
+        .eq("relationship_id", relationship_id);
+      const done = new Set((intakes ?? []).map((r) => r.user_id as string));
+      if (!done.has(relationship.partner1_id) || !done.has(relationship.partner2_id)) {
+        return jsonResponse({
+          ok: false,
+          message: "Both people must finish their private intake before starting therapy",
+        }, 403);
+      }
+    }
+
     const isPartner1 = relationship.partner1_id === user.id;
     const { data: session, error } = await admin
       .from("sessions")

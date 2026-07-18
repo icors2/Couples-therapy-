@@ -15,6 +15,7 @@ import com.aicouples.therapy.auth.AuthScreen
 import com.aicouples.therapy.auth.AuthViewModel
 import com.aicouples.therapy.history.HistoryScreen
 import com.aicouples.therapy.home.HomeScreen
+import com.aicouples.therapy.intake.IntakeScreen
 import com.aicouples.therapy.pairing.PairingScreen
 import com.aicouples.therapy.settings.SettingsScreen
 import com.aicouples.therapy.therapy.ui.TherapyScreen
@@ -41,7 +42,8 @@ fun TherapyNavHost(
         val allowStay = current == Routes.THERAPY ||
             current == Routes.HISTORY ||
             current == Routes.SETTINGS ||
-            current == Routes.PAIRING
+            current == Routes.PAIRING ||
+            current == Routes.INTAKE
         if (current != target && !allowStay) {
             navController.navigate(target) {
                 popUpTo(0) { inclusive = true }
@@ -97,6 +99,20 @@ fun TherapyNavHost(
                     navController.navigate(Routes.therapy(sessionId))
                 },
                 onAddConnection = { navController.navigate(Routes.PAIRING) },
+                onOpenIntake = { relationshipId ->
+                    navController.navigate(Routes.intake(relationshipId))
+                },
+            )
+        }
+        composable(
+            route = Routes.INTAKE,
+            arguments = listOf(navArgument("relationshipId") { type = NavType.StringType }),
+        ) {
+            IntakeScreen(
+                onBack = { navController.popBackStack() },
+                onCompleted = {
+                    navController.popBackStack(Routes.HOME, inclusive = false)
+                },
             )
         }
         composable(

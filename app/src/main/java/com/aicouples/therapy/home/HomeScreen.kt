@@ -43,6 +43,7 @@ fun HomeScreen(
     onOpenSettings: () -> Unit,
     onOpenSession: (String) -> Unit,
     onAddConnection: () -> Unit,
+    onOpenIntake: (String) -> Unit,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -147,8 +148,12 @@ fun HomeScreen(
                     Text(
                         text = buildString {
                             append(item.typeLabel)
-                            if (item.needsConsent) append(" · consent needed")
-                            else if (!item.canStartTherapy) append(" · waiting")
+                            when {
+                                item.needsConsent -> append(" · consent needed")
+                                item.needsMyIntake -> append(" · intake needed")
+                                item.waitingPartnerIntake -> append(" · waiting on intake")
+                                !item.canStartTherapy -> append(" · waiting")
+                            }
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -165,11 +170,34 @@ fun HomeScreen(
             Text("Add connection")
         }
 
+        val selected = state.selected
+        if (selected?.needsMyIntake == true) {
+            Button(
+                onClick = { onOpenIntake(selected.relationship.id) },
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+            ) {
+                Text("Complete intake", style = MaterialTheme.typography.titleMedium)
+            }
+        } else if (selected?.waitingPartnerIntake == true) {
+            Text(
+                text = "Waiting for ${selected.partner?.displayName ?: "them"} to finish their private intake.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
         Spacer(modifier = Modifier.height(8.dp))
 
         Button(
             onClick = { viewModel.startTherapy(onStartTherapy) },
-            enabled = !state.isStarting && state.selected != null,
+            enabled = !state.isStarting &&
+                selected != null &&
+                selected.canStartTherapy &&
+                !selected.needsMyIntake &&
+                !selected.waitingPartnerIntake,
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -178,8 +206,10 @@ fun HomeScreen(
             Text(
                 text = when {
                     state.isStarting -> "Starting…"
-                    state.selected == null -> "Start Therapy"
-                    else -> "Start Therapy with ${state.selected?.partner?.displayName ?: "them"}"
+                    selected == null -> "Start Therapy"
+                    selected.needsMyIntake -> "Complete intake first"
+                    selected.waitingPartnerIntake -> "Waiting for their intake"
+                    else -> "Start Therapy with ${selected.partner?.displayName ?: "them"}"
                 },
                 style = MaterialTheme.typography.titleLarge,
             )

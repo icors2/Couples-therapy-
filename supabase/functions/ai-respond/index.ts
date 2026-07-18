@@ -2,10 +2,28 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import {
   chatCompletion,
+  formatIntakeBlock,
   shouldAiRespond,
   therapistSystemPrompt,
 } from "../_shared/openai.ts";
 import { requireUser, serviceClient } from "../_shared/supabase.ts";
+
+function roleLabelForPartner(
+  relationship: {
+    relationship_type?: string;
+    partner1_role?: string;
+    partner2_role?: string;
+  },
+  which: "a" | "b",
+): string {
+  if (relationship.relationship_type !== "parent_child") {
+    return which === "a" ? "Partner A" : "Partner B";
+  }
+  const role = which === "a" ? relationship.partner1_role : relationship.partner2_role;
+  if (role === "parent") return "Parent";
+  if (role === "child") return "Child";
+  return which === "a" ? "Person A" : "Person B";
+}
 
 const RECENT_RAW_LIMIT = 24;
 const SUMMARY_TRIGGER = 30;
@@ -61,7 +79,14 @@ Deno.serve(async (req) => {
 
     const transcript = messages ?? [];
     const last = transcript[transcript.length - 1];
-    if (!last) return jsonResponse({ ok: true, message: "No messages yet" });
+    if (!last && !force) return jsonResponse({ ok: true, message: "No messages yet" });
+
+    const { count } = await admin
+      .from("sessions")
+      .select("*", { count: "exact", head: true })
+      .eq("relationship_id", session.relationship_id)
+      .eq("status", "ended");
+    const isFirstSession = (count ?? 0) === 0;
 
     // Idempotency: if this trigger already produced an AI reply, skip OpenAI.
     if (trigger_message_id) {
@@ -88,6 +113,11 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Forced opening: only once per session when no AI message exists yet.
+    if (force && lastAi) {
+      return jsonResponse({ ok: true, message: "Opening already sent" });
+    }
+
     let streak = 0;
     for (let i = transcript.length - 1; i >= 0; i--) {
       const s = transcript[i].sender;
@@ -95,7 +125,11 @@ Deno.serve(async (req) => {
       else break;
     }
 
-    if (!force && !shouldAiRespond(streak, last.sender, last.content ?? "")) {
+    if (
+      !force &&
+      (!last ||
+        !shouldAiRespond(streak, last.sender, last.content ?? "", isFirstSession))
+    ) {
       return jsonResponse({ ok: true, message: "AI waiting for more context" });
     }
 
@@ -133,11 +167,21 @@ Deno.serve(async (req) => {
       return `${who}: ${m.content}`;
     });
 
-    const { count } = await admin
-      .from("sessions")
-      .select("*", { count: "exact", head: true })
-      .eq("relationship_id", session.relationship_id)
-      .eq("status", "ended");
+    let intakeBlock: string | null = null;
+    if (isFirstSession) {
+      const { data: intakeRows } = await admin
+        .from("relationship_intakes")
+        .select("user_id, answers")
+        .eq("relationship_id", session.relationship_id);
+      const labeled = (intakeRows ?? []).map((row) => {
+        const which = row.user_id === relationship.partner1_id ? "a" as const : "b" as const;
+        return {
+          label: roleLabelForPartner(relationship, which),
+          answers: row.answers,
+        };
+      });
+      intakeBlock = formatIntakeBlock(labeled) || null;
+    }
 
     const nonSystem = transcript.filter((m) => m.sender !== "system");
     let workingSummary: string | null = session.working_summary ?? null;
@@ -180,7 +224,7 @@ Deno.serve(async (req) => {
                   `Older turns to fold in:\n${olderText}`,
               },
             ],
-            { temperature: 0.2 },
+            { temperature: 0.2, purpose: "memory" },
           );
           workingSummary = summaryCompletion.content.trim();
           await admin
@@ -195,29 +239,43 @@ Deno.serve(async (req) => {
 
     let system = therapistSystemPrompt(
       memoryRow?.memory_json ?? null,
-      (count ?? 0) === 0,
+      isFirstSession,
       workingSummary,
       promptCtx,
+      intakeBlock,
     );
+    if (force && isFirstSession) {
+      system +=
+        "\n\nOpen the session now with a short welcome and ground rules, then invite both " +
+        "people to share based on themes from their private intakes (without revealing private details).";
+    }
     if (pinnedFacts.length > 0) {
       system +=
         `\n\nPinned messages (explicitly marked by partners — MUST remember and use when relevant):\n` +
         pinnedFacts.map((f) => `- ${f}`).join("\n");
     }
 
+    const recentTurns = nonSystem.slice(-RECENT_RAW_LIMIT).map((m) => ({
+      role: (m.sender === "ai" ? "assistant" : "user") as "assistant" | "user",
+      content: m.sender === "ai"
+        ? m.content
+        : `[${m.sender === "partner_a" ? "Partner A" : "Partner B"}]: ${m.content}`,
+    }));
     const chatMessages = [
       { role: "system" as const, content: system },
-      ...nonSystem
-        .slice(-RECENT_RAW_LIMIT)
-        .map((m) => ({
-          role: (m.sender === "ai" ? "assistant" : "user") as "assistant" | "user",
-          content: m.sender === "ai"
-            ? m.content
-            : `[${m.sender === "partner_a" ? "Partner A" : "Partner B"}]: ${m.content}`,
-        })),
+      ...(recentTurns.length > 0
+        ? recentTurns
+        : [{
+          role: "user" as const,
+          content:
+            "[System]: Both people have joined. Begin the guided first session opening now.",
+        }]),
     ];
 
-    const completion = await chatCompletion(chatMessages, { temperature: 0.65 });
+    const completion = await chatCompletion(chatMessages, {
+      temperature: 0.65,
+      purpose: "chat",
+    });
 
     const { data: aiMessage, error } = await admin
       .from("messages")

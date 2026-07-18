@@ -164,6 +164,15 @@ In Supabase → **Edge Functions → Secrets** (or CLI):
 
 ```bash
 supabase secrets set OPENAI_API_KEY=sk-...
+# Live therapist replies (ai-respond)
+supabase secrets set OPENAI_CHAT_MODEL=gpt-4o
+# Memory handoffs + working summaries (generate-memory / session summary)
+supabase secrets set OPENAI_MEMORY_MODEL=gpt-4o-mini
+```
+
+Optional legacy fallback (used only if a purpose-specific secret is unset):
+
+```bash
 supabase secrets set OPENAI_MODEL=gpt-4o-mini
 ```
 
@@ -202,6 +211,11 @@ supabase functions deploy ai-respond
 supabase functions deploy generate-memory
 supabase functions deploy end-session
 supabase functions deploy session-timeout
+supabase functions deploy submit-intake
+supabase functions deploy intake-status
+supabase functions deploy attest-age
+supabase functions deploy consent-parental
+supabase functions deploy unpair-partner
 ```
 
 Or deploy everything under `supabase/functions/`:
@@ -210,7 +224,9 @@ Or deploy everything under `supabase/functions/`:
 supabase functions deploy
 ```
 
-Chat AI only needs `ai-respond` + `generate-memory` (plus `OPENAI_API_KEY`). Deploy all eight for full session lifecycle + inactivity timeout.
+Chat AI only needs `ai-respond` + `generate-memory` (plus `OPENAI_API_KEY`). Deploy all functions for full session lifecycle, private intake, and inactivity timeout.
+
+Private intake: both members must complete `submit-intake` before the first therapy session for a connection. Answers are RLS-private (own row only); the AI loads both via service role.
 
 ### Schedule inactivity timeout
 
