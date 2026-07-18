@@ -1,6 +1,8 @@
-# User Setup — AI Couples Therapy
+# User Setup — Family Therapy
 
 This guide covers everything the codebase cannot configure for you: cloud projects, OAuth, API keys, and device install.
+
+Display name in the app: **Family Therapy**. Package id remains `com.aicouples.therapy`.
 
 ## What was corrected from the original plan
 
@@ -11,6 +13,7 @@ Before setup, note these intentional deviations from `Initial plan.md`:
 3. **Full transcripts stay forever** in `messages`. Compression only rolls structured `ai_memory` / `ai_archives` documents (token control without deleting history).
 4. **Session inactivity timeout is server-side** via `session-timeout` + SQL helper `expire_inactive_sessions` (schedule with cron). Client timers alone are not enough.
 5. **In-app notifications table is first-class.** True mobile push (FCM) is optional follow-up — wire Firebase later if you need lock-screen alerts.
+6. **Private intake is required before the first therapy session** for each connection. Answers are own-row RLS; the AI loads both via service role. Partners never read each other’s forms.
 
 ---
 
@@ -32,7 +35,9 @@ supabase link --project-ref YOUR_PROJECT_REF
 supabase db push
 ```
 
-Or paste/run `supabase/migrations/20260717000000_init.sql` in the SQL editor.
+Migrations under `supabase/migrations/` include init, notifications, session/AI helpers, multi-relationship family, and **private intakes** (`20260717170000_relationship_intakes.sql`).
+
+Or paste/run the SQL files in order in the SQL editor.
 
 ### Enable Google Auth
 
@@ -140,7 +145,7 @@ Then:
 
 1. **Credentials** → **+ Create credentials** → **OAuth client ID**.
 2. **Application type** → **Android**.
-3. Name it e.g. `AI Couples Therapy Debug`.
+3. Name it e.g. `Family Therapy Debug`.
 4. **Package name:** `com.aicouples.therapy`
 5. **SHA-1 certificate fingerprint:** paste the SHA-1 from section 2b.
 6. **Create**.
@@ -204,6 +209,11 @@ From the repo root (after `supabase link`):
 
 ```bash
 supabase functions deploy pair-partner
+supabase functions deploy unpair-partner
+supabase functions deploy attest-age
+supabase functions deploy consent-parental
+supabase functions deploy submit-intake
+supabase functions deploy intake-status
 supabase functions deploy start-session
 supabase functions deploy join-session
 supabase functions deploy decline-session
@@ -211,11 +221,6 @@ supabase functions deploy ai-respond
 supabase functions deploy generate-memory
 supabase functions deploy end-session
 supabase functions deploy session-timeout
-supabase functions deploy submit-intake
-supabase functions deploy intake-status
-supabase functions deploy attest-age
-supabase functions deploy consent-parental
-supabase functions deploy unpair-partner
 ```
 
 Or deploy everything under `supabase/functions/`:
@@ -224,9 +229,54 @@ Or deploy everything under `supabase/functions/`:
 supabase functions deploy
 ```
 
-Chat AI only needs `ai-respond` + `generate-memory` (plus `OPENAI_API_KEY`). Deploy all functions for full session lifecycle, private intake, and inactivity timeout.
+Chat AI only needs `ai-respond` + `generate-memory` (plus `OPENAI_API_KEY`). Deploy all functions for age gate, consent, private intake, session lifecycle, and inactivity timeout.
 
-Private intake: both members must complete `submit-intake` before the first therapy session for a connection. Answers are RLS-private (own row only); the AI loads both via service role.
+### Private intake
+
+- Both members of a connection must complete **`submit-intake`** before the **first** therapy session (no prior `ended` sessions for that relationship).
+- Answers live in `relationship_intakes` with **own-row RLS** (partner cannot `SELECT` the other’s answers).
+- Status without leaking answers: Edge Function `intake-status` or SQL `get_intake_status(rel_id)`.
+- On first session, after both join, `join-session` triggers a guided AI opening (`ai-respond` with `force: true`) using both intakes in the system prompt only.
+- Later sessions for the same connection do **not** require re-intake.
+
+### Reset test data so intake runs again (same accounts)
+
+Intake is skipped once a connection has any `ended` session. To re-test intake without unpairing, clear sessions/memory for that relationship (SQL Editor; replace the UUID):
+
+```sql
+-- Replace with your relationships.id
+with rel as (select 'YOUR_RELATIONSHIP_UUID'::uuid as id),
+deleted_memory as (
+  delete from public.ai_memory where relationship_id = (select id from rel) returning id
+),
+deleted_archives as (
+  delete from public.ai_archives where relationship_id = (select id from rel) returning id
+),
+deleted_intakes as (
+  delete from public.relationship_intakes where relationship_id = (select id from rel) returning id
+),
+deleted_sessions as (
+  delete from public.sessions where relationship_id = (select id from rel) returning id
+),
+deleted_notifs as (
+  delete from public.notifications n
+  using public.relationships r
+  where r.id = (select id from rel)
+    and n.user_id in (r.partner1_id, r.partner2_id)
+    and n.type::text in (
+      'session_invite', 'partner_joined', 'session_ended',
+      'session_timeout', 'intake_completed'
+    )
+  returning n.id
+)
+select
+  (select count(*) from deleted_sessions) as sessions_deleted,
+  (select count(*) from deleted_memory) as memory_deleted,
+  (select count(*) from deleted_intakes) as intakes_deleted,
+  (select count(*) from deleted_notifs) as notifications_deleted;
+```
+
+Accounts stay logged in and paired. Reopen Home → both should see **Complete intake**.
 
 ### Schedule inactivity timeout
 
@@ -238,7 +288,7 @@ Header: `x-cron-secret: <CRON_SECRET>`
 
 Suggested cadence: every 5 minutes.
 
-Deploy `session-timeout` and set `CRON_SECRET` before scheduling. Chat AI works without this cron; it only auto-ends sessions idle for 10+ minutes.
+Deploy `session-timeout` and set `CRON_SECRET` before scheduling. Chat AI works without this cron; it only auto-ends sessions idle for 10+ minutes (pending invites expire after 30 minutes).
 
 #### Option A — Dashboard Cron UI (if available)
 
@@ -341,12 +391,14 @@ The workflow still builds if these are empty (placeholder BuildConfig values). R
 
 ## 6. Quick smoke test
 
-1. Install the debug APK on two devices/emulators (or two Google accounts via multiple users).
-2. Sign in with Google on both.
-3. Share pair codes and connect.
-4. Partner A taps **Start Therapy** → Partner B **Join**.
-5. Exchange a few messages → AI should respond after enough partner context.
-6. **End Session** → confirm a new `ai_memory` row appears in Supabase.
+1. Install the debug APK on two devices/emulators (or two Google accounts).
+2. Sign in with Google on both → complete **age gate** (date of birth).
+3. Add a connection (couples or parent–child). For parent–child with a minor, parent grants **consent** before therapy.
+4. Both complete **private intake** → Start Therapy unlocks.
+5. Partner A taps **Start Therapy** → Partner B **Join** → AI should open with a guided first-session message.
+6. Exchange a few messages → AI continues (more responsive on the first session).
+7. **End Session** → confirm a new `ai_memory` row appears in Supabase.
+8. Start therapy again → no second intake required for that connection.
 
 ---
 
@@ -356,3 +408,4 @@ The workflow still builds if these are empty (placeholder BuildConfig values). R
 - Anthropic / Gemini providers behind the same Edge Function interface
 - Room offline cache for message history
 - Play App Signing SHA-1 for release Google Sign-In
+- Edit intake after first complete (v1 locks after submit)
